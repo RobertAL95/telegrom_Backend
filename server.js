@@ -7,6 +7,7 @@ const http = require('http');
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// WebSockets
 wss.on('connection', (ws) => {
   console.log('Cliente conectado al WS');
   ws.on('message', (message) => {
@@ -16,11 +17,19 @@ wss.on('connection', (ws) => {
   });
 });
 
-mongoose.connect(mongoURI).then(() => {
-  console.log('DB conectada');
+// Conexión a MongoDB en Railway
+mongoose.connect(mongoURI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => {
+  console.log("✅ Conectado a MongoDB en Railway");
 
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, "0.0.0.0", () => {
-    console.log(`Servidor corriendo en puerto ${PORT}`);
+    console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
   });
+})
+.catch((err) => {
+  console.error("❌ Error al conectar a MongoDB en Railway:", err);
 });
