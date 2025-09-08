@@ -17,13 +17,13 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Conexión a MongoDB en Railway
+// Conexión a MongoDB
 mongoose.connect(mongoURI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
 .then(() => {
-  console.log("✅ Conectado a MongoDB en Railway");
+  console.log("✅ Conectado a MongoDB");
 
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, "0.0.0.0", () => {
@@ -31,5 +31,5 @@ mongoose.connect(mongoURI, {
   });
 })
 .catch((err) => {
-  console.error("❌ Error al conectar a MongoDB en Railway:", err);
+  console.error("❌ Error al conectar a MongoDB:", err);
 });
