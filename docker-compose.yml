@@ -1,23 +1,33 @@
 version: '3.8'
+
 services:
   backend:
     build: .
     container_name: backend_app
     ports:
-      - "3000:3000"
+      - "4000:4000"   # host:container -> accesible en http://localhost:4000
     environment:
+      - PORT=4000
       - MONGO_URI=mongodb://mongo:27017/mydb
     depends_on:
       - mongo
+    networks:
+      - appnet
 
   mongo:
     image: mongo:6
-    container_name: mongo_db
+    container_name: mongodb
     restart: always
     ports:
-      - "27017:27017"
+      - "27017:27017"  # accesible desde tu host en localhost:27017
     volumes:
       - mongo_data:/data/db
+    networks:
+      - appnet
 
 volumes:
   mongo_data:
+
+networks:
+  appnet:
+    driver: bridge

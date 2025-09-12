@@ -17,7 +17,7 @@ RUN npm rebuild bcrypt --build-from-source
 COPY . .
 
 # Exponer el puerto que usa Express
-EXPOSE 3000
+EXPOSE 4000
 
 # Comando de inicio
 CMD ["npm", "start"]
