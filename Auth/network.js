@@ -8,6 +8,7 @@ router.post('/register', async (req, res) => {
   try {
     const result = await controller.register(req.body);
     response.success(req, res, result, 201);
+    console.log('Usuario registrado, status 201')
   } catch (e) {
     response.error(req, res, e.message, 400);
   }
