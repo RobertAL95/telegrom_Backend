@@ -7,7 +7,7 @@ const MessageSchema = new mongoose.Schema({
 });
 
 const ConversationSchema = new mongoose.Schema({
-  participants: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // mínimo 2
+  participants: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }],
   messages: [MessageSchema],
   createdAt: { type: Date, default: Date.now },
 });
