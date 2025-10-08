@@ -5,18 +5,21 @@ services:
     build: .
     container_name: backend_app
     ports:
-      - "5001:4000"   # host:container -> accesible en Windows por http://localhost:5001
+      - "5001:4000"   # host:container -> frontend usa localhost:5001
     environment:
       - PORT=4000
       - MONGO_URI=mongodb://mongo:27017/mydb
+      - REDIS_URL=redis://redis:6379
       - GOOGLE_CLIENT_ID=TU_CLIENT_ID_REAL
       - GOOGLE_CLIENT_SECRET=TU_CLIENT_SECRET_REAL
       - GOOGLE_CALLBACK_URL=http://localhost:5001/auth/google/callback
       - SESSION_SECRET=secret123
       - JWT_SECRET=secret123
       - FRONTEND_URL=http://localhost:3000
+      - NODE_ENV=development
     depends_on:
       - mongo
+      - redis
     networks:
       - appnet
 
@@ -25,9 +28,18 @@ services:
     container_name: mongodb
     restart: always
     ports:
-      - "27017:27017"  # accesible desde tu host en localhost:27017
+      - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    networks:
+      - appnet
+
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: always
+    ports:
+      - "6379:6379"
     networks:
       - appnet
 
@@ -36,7 +48,7 @@ services:
     container_name: mongo_express
     restart: always
     ports:
-      - "8081:8081"   # interfaz gráfica en http://localhost:8081
+      - "8081:8081"
     environment:
       - ME_CONFIG_MONGODB_SERVER=mongo
       - ME_CONFIG_MONGODB_PORT=27017

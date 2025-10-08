@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const controller = require('./chatController');
+const controller = require('./controller');
 const response = require('../network/response');
 
 // Crear o recuperar conversación

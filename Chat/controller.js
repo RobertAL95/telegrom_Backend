@@ -1,4 +1,4 @@
-const chatService = require('./chatService');
+const chatService = require('./service');
 
 exports.getOrCreateConversation = (participants) => chatService.getOrCreateConversation(participants);
 exports.sendMessage = (conversationId, sender, text) => chatService.sendMessage(conversationId, sender, text);
