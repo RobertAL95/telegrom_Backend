@@ -1,20 +1,28 @@
+'use strict';
+
+require('dotenv').config();
+
 module.exports = {
-  // 🔐 JWT
-  jwtSecret: process.env.JWT_SECRET || 'dev_jwt_secret',
-
-  // 🍃 MongoDB
-  mongoURI: process.env.MONGO_URI || 'mongodb://localhost:27017/mydb',
-
-  // 🌐 CORS / Frontend URL
+  // 🌐 General
+  nodeEnv: process.env.NODE_ENV || 'development',
+  port: process.env.PORT || 4000,
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
 
-  // 🌎 Entorno actual
-  nodeEnv: process.env.NODE_ENV || 'development',
+  // 🔐 Seguridad
+  jwtSecret: process.env.JWT_SECRET || 'fallback_jwt_secret',
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '1h',
+  jwtInviteExpiresIn: process.env.JWT_INVITE_EXPIRES_IN || '10m',
 
-  // 🔑 OAuth (Google, etc.)
+  // 🍃 MongoDB
+  mongoURI: process.env.MONGO_URI || 'mongodb://localhost:27017/flymdb',
+
+  // 🔴 Redis
+  redisUrl: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+
+  // 📩 Google OAuth (opcional)
   google: {
-    clientID: process.env.GOOGLE_CLIENT_ID || '',
+    clientId: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    callbackURL: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:5001/auth/google/callback',
+    callbackUrl: process.env.GOOGLE_CALLBACK_URL || '',
   },
 };

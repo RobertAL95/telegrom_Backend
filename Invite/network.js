@@ -4,43 +4,52 @@ const response = require('../network/response');
 const controller = require('./controller');
 const jwtUtils = require('../utils/jwt');
 
-// POST /invite  -> genera link (intenta sacar userId del token Authorization)
+// ===================================================
+// 🟢 Generar link de invitación (usuario autenticado)
+// ===================================================
 router.post('/', async (req, res) => {
   try {
-    // Si frontend manda Authorization: Bearer <token> (login token), verificamos y extraemos userId
-    let userId = null;
-    try {
-      const authHeader = req.headers.authorization;
-      if (authHeader) {
-        const token = authHeader.split(' ')[1];
-        const decoded = jwtUtils.verify(token);
-        userId = decoded.id || decoded.userId || decoded.inviter;
-      }
-    } catch (e) {
-      // no pasa nada, intentaremos leer userId por body
-    }
+    const token = req.cookies?.token;
+    if (!token) return response.error(req, res, 'No autenticado', 401);
 
-    if (!userId) userId = req.body.userId;
-    if (!userId) return response.error(req, res, 'Falta userId', 400);
+    const decoded = jwtUtils.verify(token);
+    if (!decoded?.id) return response.error(req, res, 'Token inválido', 401);
 
-    const link = controller.createInvite(userId);
+    const link = await controller.createInvite(decoded.id);
     response.success(req, res, { link }, 200);
   } catch (e) {
+    console.error('❌ Error en /invite:', e.message);
     response.error(req, res, e.message, 500);
   }
 });
 
-// POST /invite/accept -> { token, guestName } -> crea guest y conversación
+// ===================================================
+// 🟡 Validar token de invitación (sin login)
+// ===================================================
+router.get('/validate/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const valid = await controller.validateInvite(token);
+    response.success(req, res, { valid }, 200);
+  } catch (e) {
+    response.error(req, res, e.message, 400);
+  }
+});
+
+// ===================================================
+// 🟢 Aceptar invitación y crear sesión de chat efímero
+// ===================================================
 router.post('/accept', async (req, res) => {
   try {
     const { token, guestName } = req.body;
     if (!token || !guestName) return response.error(req, res, 'Faltan datos', 400);
 
-    const convo = await controller.acceptInvite(token, guestName);
-    response.success(req, res, convo, 201);
+    const result = await controller.acceptInvite(token, guestName);
+    response.success(req, res, result, 201);
   } catch (e) {
-    response.error(req, res, e.message || 'Error', 400);
+    response.error(req, res, e.message, 400);
   }
 });
+
 
 module.exports = router;

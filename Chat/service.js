@@ -62,20 +62,51 @@ exports.getByUser = async (userId) => {
 };
 
 // Generar link de invitación
-exports.generateInvite = (inviterId) => {
-  const token = jwtUtils.sign({ inviter: inviterId });
-  const link = `${process.env.FRONTEND_URL}/chat?invite=${token}`;
+exports.generateInvite = async (inviterId) => {
+  // 1. Crear conversación vacía si no existe
+  const convo = await Conversation.create({
+    participants: [inviterId],
+    messages: []
+  });
+
+  // 2. Generar token con chatId incluido
+  const token = jwtUtils.sign({
+    inviterId,
+    chatId: convo._id,
+    role: 'inviter'
+  });
+
+  // 3. Generar link con ese chatId
+  const link = `${process.env.FRONTEND_URL}/chat/${convo._id}?invite=${token}`;
   return link;
 };
+
 
 // Aceptar invitación
 exports.acceptInvite = async (token, guestName) => {
   const decoded = jwtUtils.verify(token);
-  const inviterId = decoded.inviter;
+  const { inviterId, chatId } = decoded;
 
+  // Validar conversación existente
+  const convo = await Conversation.findById(chatId);
+  if (!convo) throw new Error('Chat no encontrado');
+
+  // Crear invitado
   const guest = new User({ name: guestName, isGuest: true });
   await guest.save();
 
-  const convo = await exports.getOrCreateConversation([inviterId, guest._id]);
-  return convo;
+  // Agregar invitado a la conversación (si no está)
+  if (!convo.participants.includes(guest._id)) {
+    convo.participants.push(guest._id);
+    await convo.save();
+  }
+
+  // Generar token de sesión para el invitado (opcional)
+  const sessionToken = jwtUtils.sign({
+    userId: guest._id,
+    chatId,
+    role: 'guest'
+  });
+
+  return { convo, sessionToken };
 };

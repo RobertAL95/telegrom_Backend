@@ -44,22 +44,39 @@ router.get('/user/:userId', async (req, res) => {
   }
 });
 
-// Generar link de invitación
-router.post('/invite', (req, res) => {
+// ===================================================
+// 🟢 Generar link de invitación (crea chatId asociado)
+// ===================================================
+router.post('/invite', async (req, res) => {
   try {
-    const link = controller.generateInvite(req.body.userId);
-    response.success(req, res, { link }, 200);
+    const { userId } = req.body;
+    if (!userId) return response.error(req, res, 'Falta userId', 400);
+
+    // Generar link y chatId desde el controlador
+    const { link, chatId } = await controller.generateInvite(userId);
+
+    response.success(req, res, { link, chatId }, 200);
   } catch (e) {
+    console.error('❌ Error en /invite:', e.message);
     response.error(req, res, e.message, 500);
   }
 });
 
-// Aceptar invitación
+
+// ===================================================
+// 🟢 Aceptar invitación (usa chatId del token JWT)
+// ===================================================
 router.post('/accept-invite', async (req, res) => {
   try {
-    const convo = await controller.acceptInvite(req.body.token, req.body.guestName);
-    response.success(req, res, convo, 201);
+    const { token, guestName } = req.body;
+    if (!token || !guestName) return response.error(req, res, 'Faltan datos', 400);
+
+    // Controlador devuelve { convo, sessionToken }
+    const { convo, sessionToken } = await controller.acceptInvite(token, guestName);
+
+    response.success(req, res, { chatId: convo._id, sessionToken }, 201);
   } catch (e) {
+    console.error('❌ Error en /accept-invite:', e.message);
     response.error(req, res, e.message, 500);
   }
 });

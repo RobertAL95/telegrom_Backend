@@ -1,67 +1,110 @@
 version: '3.8'
 
 services:
+  # =====================================================
+  # 🚀 Backend principal
+  # =====================================================
   backend:
     build: .
-    container_name: backend_app
+    container_name: flym_backend
     ports:
-      - "5001:4000"   # host:container -> frontend usa localhost:5001
+      - "5001:4000"  # host:container (frontend apunta a localhost:5001)
     environment:
-      - PORT=4000
-      - MONGO_URI=mongodb://mongo:27017/mydb
-      - REDIS_URL=redis://redis:6379
-      - GOOGLE_CLIENT_ID=TU_CLIENT_ID_REAL
-      - GOOGLE_CLIENT_SECRET=TU_CLIENT_SECRET_REAL
-      - GOOGLE_CALLBACK_URL=http://localhost:5001/auth/google/callback
-      - SESSION_SECRET=secret123
-      - JWT_SECRET=secret123
-      - FRONTEND_URL=http://localhost:3000
-      - NODE_ENV=development
-    depends_on:
-      - mongo
-      - redis
-    networks:
-      - appnet
+      NODE_ENV: development
+      PORT: 4000
+      FRONTEND_URL: http://localhost:3000
 
+      # 🔐 Seguridad
+      JWT_SECRET: super_secret_key_123
+      JWT_EXPIRES_IN: 1h
+      JWT_INVITE_EXPIRES_IN: 10m
+
+      # 🍃 MongoDB
+      MONGO_URI: mongodb://mongo:27017/flymdb
+
+      # 🔴 Redis
+      REDIS_URL: redis://redis:6379
+
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+    networks:
+      - flymnet
+
+    restart: unless-stopped
+    command: node server.js
+
+  # =====================================================
+  # 🍃 MongoDB
+  # =====================================================
   mongo:
     image: mongo:6
-    container_name: mongodb
-    restart: always
+    container_name: flym_mongo
+    restart: unless-stopped
     ports:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
     networks:
-      - appnet
+      - flymnet
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
+  # =====================================================
+  # 🔴 Redis
+  # =====================================================
   redis:
     image: redis:7
-    container_name: redis
-    restart: always
+    container_name: flym_redis
+    restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "16379:6379"
     networks:
-      - appnet
+      - flymnet
+    command: >
+      redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # =====================================================
+  # 🧭 Mongo Express (GUI web)
+  # =====================================================
   mongo-express:
     image: mongo-express:latest
-    container_name: mongo_express
-    restart: always
+    container_name: flym_mongo_express
+    restart: unless-stopped
     ports:
       - "8081:8081"
     environment:
-      - ME_CONFIG_MONGODB_SERVER=mongo
-      - ME_CONFIG_MONGODB_PORT=27017
-      - ME_CONFIG_BASICAUTH_USERNAME=admin
-      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+      ME_CONFIG_MONGODB_SERVER: mongo
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
     networks:
-      - appnet
+      - flymnet
 
+# =====================================================
+# Volúmenes persistentes
+# =====================================================
 volumes:
   mongo_data:
 
+# =====================================================
+# Red de comunicación interna
+# =====================================================
 networks:
-  appnet:
+  flymnet:
     driver: bridge

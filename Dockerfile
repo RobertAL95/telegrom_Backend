@@ -1,23 +1,47 @@
-# Imagen base oficial de Node.js (mejor usar LTS para estabilidad)
-FROM node:20
+# ======================================================
+# 🧱 Etapa 1: Builder
+# ======================================================
+FROM node:20-alpine AS builder
 
-# Crear y usar el directorio de la app
+# Mejor rendimiento de npm en entornos limitados
+ENV NODE_ENV=development
+
 WORKDIR /app
 
-# Copiar package.json y package-lock.json primero
+# Copiamos solo lo necesario para instalar dependencias
 COPY package*.json ./
 
-# Instalar dependencias (asegura compilación en Linux)
-RUN npm install
+# Instala dependencias (usa cache de Docker)
+RUN npm install --legacy-peer-deps
 
-# (Opcional) Recompilar bcrypt desde cero para evitar binarios incompatibles
-RUN npm rebuild bcrypt --build-from-source
+# Recompilar bcrypt si lo usas (según tu código)
+RUN npm rebuild bcrypt --build-from-source || echo "bcrypt rebuild skipped"
 
-# Copiar el resto del código
+# Copiamos el resto del código fuente
 COPY . .
 
-# Exponer el puerto que usa Express
+# ======================================================
+# 🚀 Etapa 2: Runner
+# ======================================================
+FROM node:20-alpine AS runner
+
+# Entorno de ejecución
+ENV NODE_ENV=production
+ENV PORT=4000
+WORKDIR /app
+
+# Copiamos solo lo esencial desde el builder
+COPY --from=builder /app /app
+
+# Instalar dependencias de producción solamente
+RUN npm prune --production
+
+# Crea un usuario no root por seguridad
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
+
+# Exponer el puerto del backend
 EXPOSE 4000
 
 # Comando de inicio
-CMD ["npm", "start"]
+CMD ["node", "server.js"]
