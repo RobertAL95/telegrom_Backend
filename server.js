@@ -11,7 +11,9 @@ const rateLimit = require('express-rate-limit');
 const compression = require('compression');
 const config = require('./config');
 const routes = require('./network/routes');
-const { initWebSocket } = require('./webSocket/index');
+
+// Importamos el inicializador de WS y la función para cerrar Redis
+const { initWSS, closeRedis } = require('./wsServer');
 
 // ===================================================
 // ⚙️ Configuración base
@@ -21,7 +23,7 @@ const server = http.createServer(app);
 const PORT = config.port || 4000;
 
 // ===================================================
-// 🍃 Conexión MongoDB con robustez adicional
+// 🍃 Conexión MongoDB Robusta
 // ===================================================
 (async () => {
   try {
@@ -40,18 +42,36 @@ const PORT = config.port || 4000;
 // ===================================================
 // 🧩 Middlewares globales
 // ===================================================
-app.set('trust proxy', 1); // necesario para Fly.io, Vercel o proxies
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
-app.use(compression()); // ⚡ mejora rendimiento de respuestas
-app.use(helmet({ crossOriginResourcePolicy: false })); // compatibilidad con CORS
+app.use(compression());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+    crossOriginOpenerPolicy: false,
+  })
+);
 
 // ===================================================
-// 🌐 Configuración CORS
+// 🌐 Configuración CORS segura
 // ===================================================
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://localhost:3000',
+  config.frontendUrl,
+].filter(Boolean);
+
 app.use(
   cors({
-    origin: config.frontendUrl,
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`🚫 CORS bloqueado para origen: ${origin}`);
+        callback(new Error('Origen no permitido por CORS'));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
@@ -77,7 +97,7 @@ app.use(limiter);
 app.use('/', routes);
 
 // ===================================================
-// 🩺 Endpoint de healthcheck (para Fly.io / monitoring)
+// 🩺 Endpoint de healthcheck
 // ===================================================
 app.get('/health', (req, res) => {
   res.status(200).json({
@@ -89,26 +109,58 @@ app.get('/health', (req, res) => {
 });
 
 // ===================================================
-// ⚡ Inicializar WebSocket efímero
+// ⚡ Inicializar WebSocket (Única instancia + Redis)
 // ===================================================
-initWebSocket(server);
+initWSS(server);
 
 // ===================================================
-// 🚀 Lanzar servidor HTTP + WS
+// 🚀 Lanzar servidor
 // ===================================================
-server.listen(PORT, '0.0.0.0', () => {
+const runningServer = server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Servidor backend corriendo en puerto ${PORT}`);
   console.log(`🌐 Acceso: http://localhost:${PORT}`);
-  console.log(`🟢 CORS permitido desde: ${config.frontendUrl}`);
 });
+
+// ===================================================
+// 🛑 Graceful Shutdown (Muerte Digna)
+// ===================================================
+async function gracefulShutdown(signal) {
+  console.log(`\n🛑 Recibida señal ${signal}. Cerrando ordenadamente...`);
+
+  // 1. Dejar de aceptar nuevas conexiones HTTP
+  runningServer.close(() => {
+    console.log('🌑 Servidor HTTP cerrado.');
+  });
+
+  try {
+    // 2. Cerrar conexiones WebSocket y Redis (Lógica en wsServer.js)
+    await closeRedis();
+
+    // 3. Cerrar conexión MongoDB
+    await mongoose.connection.close(false);
+    console.log('🍃 Conexión MongoDB cerrada.');
+
+    console.log('✅ Cierre completado con éxito.');
+    process.exit(0);
+  } catch (err) {
+    console.error('❌ Error durante el cierre:', err);
+    process.exit(1);
+  }
+}
+
+// Capturar señales de terminación del sistema (Docker stop, Ctrl+C)
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // ===================================================
 // 🧹 Manejo de errores no capturados
 // ===================================================
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason) => {
   console.error('❌ Rechazo no manejado:', reason);
 });
+
 process.on('uncaughtException', (err) => {
   console.error('❌ Excepción no capturada:', err);
+  // Para errores críticos no manejados, reiniciamos el proceso
   process.exit(1);
 });

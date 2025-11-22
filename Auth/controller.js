@@ -1,29 +1,64 @@
+'use strict';
+
 const service = require('./service');
-const jwtUtils = require('../utils/jwt'); // tiene sign/verify
+const jwtUtils = require('../utils/jwt');
 
-// Registrar -> devolvemos usuario "limpio"
-exports.register = async (data) => {
-  const created = await service.register(data);
-  return { id: created._id, name: created.name, email: created.email };
+// ===================================================
+// 🟢 Registro
+// ===================================================
+exports.register = async (body) => {
+  // Nota: service.register ya recibe datos validados por Joi en network
+  const savedUser = await service.register(body);
+
+  // Devolvemos DTO limpio (sin password, ni __v)
+  return {
+    id: savedUser._id,
+    name: savedUser.name,
+    email: savedUser.email,
+  };
 };
 
-// Login -> devolvemos token y user (para que el frontend no tenga que llamar /me inmediatamente)
-exports.login = async (data) => {
-  const token = await service.login(data);
-  const user = await service.findByEmail(data.email);
-  const userSanitized = user ? { id: user._id, name: user.name, email: user.email } : null;
-  return { token, user: userSanitized };
+// ===================================================
+// 🟢 Login
+// ===================================================
+exports.login = async ({ email, password }) => {
+  const user = await service.login({ email, password });
+  
+  // Estandarizamos retorno para que network siempre reciba { user: ... }
+  return { 
+    user: { 
+      id: user._id, 
+      name: user.name, 
+      email: user.email 
+    } 
+  };
 };
 
+// ===================================================
+// 🟢 OAuth (Google)
+// ===================================================
 exports.oauth = async (profile) => {
-  return await service.oauth(profile); // devuelve token
+  const user = await service.oauth(profile);
+  
+  // Corrección: Devolvemos 'user' explícitamente, no 'token'
+  return { 
+    user: {
+      id: user._id,
+      name: user.name,
+      email: user.email
+    }
+  };
 };
 
-// Obtener usuario a partir de un token JWT
+// ===================================================
+// 🟢 Obtener User desde Token
+// ===================================================
 exports.getUserFromToken = async (token) => {
-  const decoded = jwtUtils.verify(token); // lanzará si inválido
-  if (!decoded || !decoded.id) throw new Error('Token inválido');
+  const decoded = jwtUtils.verify(token);
+  if (!decoded?.id) throw new Error('Token inválido');
+
   const user = await service.findById(decoded.id);
-  if (!user) return null;
+  if (!user) throw new Error('Usuario no encontrado');
+
   return { id: user._id, name: user.name, email: user.email };
 };

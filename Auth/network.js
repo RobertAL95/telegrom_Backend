@@ -1,68 +1,111 @@
+'use strict';
+
 const express = require('express');
 const router = express.Router();
 const response = require('../network/response');
 const controller = require('./controller');
-const passport = require('../utils/oauth'); // Si usas Google OAuth
+const passport = require('../utils/oauth');
+const auth = require('../middleware');
+const { registerSchema, loginSchema } = require('./validators'); // 👈 Importamos Joi
+
+const {
+  signAccess,
+  signRefresh,
+  verify,
+  ttlToMs,
+  ACCESS_TTL,
+  REFRESH_TTL,
+} = require('../utils/jwt');
 
 // ===================================================
-// 🟢 Registro de usuario
+// ⚙️ Middleware Helper de Validación Joi
 // ===================================================
-router.post('/register', async (req, res) => {
+function validate(schema) {
+    return (req, res, next) => {
+        // 'abortEarly: false' muestra todos los errores, no solo el primero
+        const { error } = schema.validate(req.body, { abortEarly: false });
+        if (error) {
+            const errorMessages = error.details.map(d => d.message).join(', ');
+            return response.error(req, res, errorMessages, 400);
+        }
+        next();
+    };
+}
+
+// ===================================================
+// ⚙️ Helpers para cookies seguras
+// ===================================================
+function setAuthCookies(res, accessToken, refreshToken) {
+  const isProd = process.env.NODE_ENV === 'production';
+  const commonOpts = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? 'none' : 'lax',
+    path: '/',
+  };
+  res.cookie('at', accessToken, { ...commonOpts, maxAge: ttlToMs(ACCESS_TTL) });
+  res.cookie('rt', refreshToken, { ...commonOpts, maxAge: ttlToMs(REFRESH_TTL) });
+}
+
+function clearAuthCookies(res) {
+  const isProd = process.env.NODE_ENV === 'production';
+  const opts = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? 'none' : 'lax',
+    path: '/',
+  };
+  res.clearCookie('at', opts);
+  res.clearCookie('rt', opts);
+}
+
+// ===================================================
+// 🟢 Registro (Con Validación Joi)
+// ===================================================
+router.post('/register', validate(registerSchema), async (req, res) => {
   try {
-    const result = await controller.register(req.body);
-    response.success(req, res, result, 201);
-    console.log(`✅ Usuario registrado: ${result.email || result.name}`);
-  } catch (e) {
-    console.error('❌ Error en /auth/register:', e.message);
-    response.error(req, res, e.message, 400);
+    const user = await controller.register(req.body);
+    // Ya no hay logs fuera del try, seguro y limpio.
+    response.success(req, res, { user }, 201);
+  } catch (err) {
+    console.error('❌ Error en /auth/register:', err.message);
+    response.error(req, res, err.message, 400); // 400 porque suele ser error de usuario (ej. email duplicado)
   }
 });
 
 // ===================================================
-// 🟢 Login de usuario (genera cookie JWT segura)
+// 🟢 Login (Con Validación Joi)
 // ===================================================
-router.post('/login', async (req, res) => {
+router.post('/login', validate(loginSchema), async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { user } = await controller.login(req.body);
 
-    if (!email || !password) {
-      return response.error(req, res, 'Email y contraseña requeridos', 400);
-    }
+    // Generar tokens
+    const accessToken = signAccess({ id: user.id, email: user.email, name: user.name });
+    const refreshToken = signRefresh({ id: user.id });
 
-    const { token, user } = await controller.login({ email, password });
+    // Cookies
+    setAuthCookies(res, accessToken, refreshToken);
 
-    // Seteamos cookie segura con el token
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production', // Solo HTTPS en prod
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Permite cross-domain en dev
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 días
+    return res.status(200).json({
+      success: true,
+      user,
     });
-
-    response.success(req, res, { user }, 200);
-    console.log(`✅ Usuario "${user.email}" hizo login con éxito`);
   } catch (e) {
     console.error('❌ Error en /auth/login:', e.message);
-    response.error(req, res, e.message, 401);
+    // Si falla el login, es 401 Unauthorized
+    res.status(401).json({ success: false, message: e.message });
   }
 });
 
 // ===================================================
-// 🟢 Perfil de usuario (requiere cookie válida)
+// 🟢 Perfil protegido
 // ===================================================
-router.get('/profile', async (req, res) => {
+router.get('/profile', auth, async (req, res) => {
   try {
-    const token = req.cookies.token;
-
-    if (!token) {
-      console.warn('⚠️ Solicitud a /auth/profile sin token');
-      return response.error(req, res, 'No autenticado', 401);
-    }
-
-    const user = await controller.getUserFromToken(token);
-    if (!user) return response.error(req, res, 'Usuario no encontrado', 404);
-
-    response.success(req, res, user, 200);
+    const { id } = req.user;
+    const user = await controller.getUserFromToken(req.cookies.at);
+    response.success(req, res, { user, session: true }, 200);
   } catch (e) {
     console.error('❌ Error en /auth/profile:', e.message);
     response.error(req, res, e.message, 401);
@@ -70,25 +113,51 @@ router.get('/profile', async (req, res) => {
 });
 
 // ===================================================
-// 🟢 Logout (elimina cookie)
+// 🟢 /auth/me (check rápido)
 // ===================================================
-router.post('/logout', async (req, res) => {
+router.get('/me', async (req, res) => {
   try {
-    res.clearCookie('token', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    });
-    response.success(req, res, { message: 'Sesión cerrada correctamente' }, 200);
-    console.log('👋 Usuario cerró sesión');
+    const token = req.cookies?.at || 
+                 (req.headers.authorization ? req.headers.authorization.split(' ')[1] : null);
+
+    if (!token) return response.error(req, res, 'Token no proporcionado', 401);
+
+    const user = await controller.getUserFromToken(token);
+    response.success(req, res, { user }, 200);
   } catch (e) {
-    console.error('❌ Error en /auth/logout:', e.message);
-    response.error(req, res, e.message, 500);
+    response.error(req, res, 'Token inválido', 401);
   }
 });
 
 // ===================================================
-// 🟢 OAuth Google (si lo usas)
+// 🟢 Refresh Token
+// ===================================================
+router.post('/refresh', async (req, res) => {
+  try {
+    const rt = req.cookies?.rt;
+    const decoded = verify(rt);
+    if (!decoded?.id) return response.error(req, res, 'Refresh token inválido', 401);
+
+    const newAccess = signAccess({ id: decoded.id });
+    const newRefresh = signRefresh({ id: decoded.id });
+    setAuthCookies(res, newAccess, newRefresh);
+
+    response.success(req, res, { refreshed: true }, 200);
+  } catch (e) {
+    response.error(req, res, 'No autorizado', 401);
+  }
+});
+
+// ===================================================
+// 🟢 Logout
+// ===================================================
+router.post('/logout', async (req, res) => {
+  clearAuthCookies(res);
+  response.success(req, res, { message: 'Sesión cerrada' }, 200);
+});
+
+// ===================================================
+// 🟢 OAuth Google
 // ===================================================
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
@@ -97,62 +166,19 @@ router.get(
   passport.authenticate('google', { failureRedirect: '/' }),
   async (req, res) => {
     try {
-      const token = await controller.oauth(req.user);
-      res.redirect(`${process.env.FRONTEND_URL || '/'}?token=${token}`);
+      // Usamos controller.oauth que ahora devuelve { user } correctamente
+      const { user } = await controller.oauth(req.user);
+      
+      const accessToken = signAccess({ id: user.id, email: user.email, name: user.name });
+      const refreshToken = signRefresh({ id: user.id });
+      setAuthCookies(res, accessToken, refreshToken);
+
+      res.redirect(`${process.env.FRONTEND_URL || '/'}?login=success`);
     } catch (e) {
-      console.error('❌ Error en /google/callback:', e.message);
+      console.error('OAuth Error:', e);
       res.redirect(`${process.env.FRONTEND_URL || '/'}?error=oauth_failed`);
     }
   }
 );
-
-// ===================================================
-// 🟢 /auth/me (usa Authorization: Bearer <token>)
-// ===================================================
-
-// ===================================================
-// 🟢 /auth/me (acepta cookie o Authorization header)
-// ===================================================
-router.get('/me', async (req, res) => {
-  try {
-    let token = null;
-
-    // ✅ Primero intentamos leer cookie
-    if (req.cookies?.token) {
-      token = req.cookies.token;
-    }
-    // 🧩 Luego intentamos leer header Authorization si no hay cookie
-    else if (req.headers.authorization) {
-      token = req.headers.authorization.split(' ')[1];
-    }
-
-    if (!token) return response.error(req, res, 'No token provided', 401);
-
-    const user = await controller.getUserFromToken(token);
-    if (!user) return response.error(req, res, 'User not found', 404);
-
-    response.success(req, res, user, 200);
-  } catch (e) {
-    console.error('❌ Error en /auth/me:', e.message);
-    response.error(req, res, 'Invalid token', 401);
-  }
-});
-
-
-router.get('/validate', async (req, res) => {
-  try {
-    const token = req.cookies?.token;
-    if (!token) return response.error(req, res, 'Token no encontrado', 401);
-
-    const user = await controller.getUserFromToken(token);
-    if (!user) return response.error(req, res, 'Token inválido', 401);
-
-    response.success(req, res, { valid: true }, 200);
-  } catch (e) {
-    console.error('❌ Error en /auth/validate:', e.message);
-    response.error(req, res, 'Sesión inválida', 401);
-  }
-});
-
 
 module.exports = router;

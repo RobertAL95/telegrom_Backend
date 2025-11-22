@@ -4,14 +4,10 @@
 // 🧩 Respuesta estándar de éxito
 // ==================================================
 exports.success = (req, res, body = null, status = 200) => {
-  res.status(status).json({
-    ok: true,
-    status,
-    path: req.originalUrl,
-    timestamp: new Date().toISOString(),
-    data: body,
-  });
+  console.log(`✅ [${req.method}] ${req.originalUrl} → ${status}`);
+  res.status(status).json(body);
 };
+
 
 // ==================================================
 // 🧩 Respuesta estándar de error

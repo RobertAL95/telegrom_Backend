@@ -2,12 +2,18 @@
 
 const WebSocket = require('ws');
 const url = require('url');
+const cookie = require('cookie');
 const jwtUtils = require('../utils/jwt');
 const redis = require('../utils/redis');
 
-// chatId → Set<WebSocket>
+// ===================================================
+// 🧩 Mapa de rooms: chatId → Set<WebSocket>
+// ===================================================
 const rooms = new Map();
 
+// ===================================================
+// 🚀 Inicializador principal del WebSocket efímero
+// ===================================================
 function initWebSocket(server) {
   const wss = new WebSocket.Server({ noServer: true });
   const subscriber = redis.duplicate();
@@ -16,12 +22,15 @@ function initWebSocket(server) {
   subscriber.on('error', (err) => console.error('❌ Redis subscriber error:', err));
   publisher.on('error', (err) => console.error('❌ Redis publisher error:', err));
 
-  // Redis → WS broadcasting
+  // ===================================================
+  // 📡 Redis → broadcast WebSocket
+  // ===================================================
   subscriber.on('message', (channel, message) => {
     try {
       const payload = JSON.parse(message);
       const clients = rooms.get(channel);
       if (!clients) return;
+
       for (const client of clients) {
         if (client.readyState === WebSocket.OPEN) {
           client.send(JSON.stringify({ type: 'message', payload }));
@@ -32,55 +41,62 @@ function initWebSocket(server) {
     }
   });
 
-  // Upgrade HTTP → WS
+  // ===================================================
+  // 🔐 Upgrade HTTP → WS con validación JWT desde cookie
+  // ===================================================
   server.on('upgrade', async (req, socket, head) => {
     const pathname = url.parse(req.url).pathname;
     if (pathname !== '/ws') return socket.destroy();
 
     try {
-      const parsed = url.parse(req.url, true);
-      const token = parsed.query?.token;
-      if (!token) {
-        socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
-        return socket.destroy();
-      }
+      // 🔎 Leer cookies desde el handshake
+      const cookies = cookie.parse(req.headers.cookie || '');
+      const token = cookies.at; // access token (15 min)
 
-      // 🔐 Verificar token JWT
-      let decoded;
-      try {
-        decoded = jwtUtils.verify(token);
-      } catch (err) {
+      if (!token) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         return socket.destroy();
       }
 
-      const { chatId, userId, inviterId, role } = decoded;
+      const decoded = jwtUtils.verify(token);
+      if (!decoded?.id) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        return socket.destroy();
+      }
+
+      // Esperamos chatId en query (?roomId=xxx o ?chatId=xxx)
+      const parsed = url.parse(req.url, true);
+      const chatId = parsed.query?.chatId || parsed.query?.roomId;
       if (!chatId) {
         socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
         return socket.destroy();
       }
 
-      // 🔎 Validar que roomId == chatId del token
-      req.user = { id: userId || inviterId || 'guest', role };
+      // Inyectar datos en la request para el upgrade
+      req.user = { id: decoded.id, email: decoded.email, name: decoded.name };
       req.chatId = chatId;
 
-      // Upgrade
+      // ✅ Autorizado → Upgrade
       wss.handleUpgrade(req, socket, head, (ws) => {
-        ws.userId = req.user.id;
-        ws.role = req.user.role;
-        ws.chatId = req.chatId;
+        ws.userId = decoded.id;
+        ws.email = decoded.email;
+        ws.name = decoded.name;
+        ws.chatId = chatId;
         wss.emit('connection', ws, req);
       });
     } catch (err) {
-      console.error('❌ Error autenticando WS:', err);
+      console.error('❌ Error autenticando WebSocket:', err);
+      socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
       socket.destroy();
     }
   });
 
-  // Nueva conexión WS
+  // ===================================================
+  // 🟢 Nueva conexión WS
+  // ===================================================
   wss.on('connection', async (ws, req) => {
-    const { userId, chatId, role } = ws;
-    console.log(`🔌 WS conectado userId=${userId} role=${role} chatId=${chatId}`);
+    const { userId, name, chatId } = ws;
+    console.log(`🔌 WS conectado: userId=${userId} name=${name} chatId=${chatId}`);
 
     if (!rooms.has(chatId)) {
       rooms.set(chatId, new Set());
@@ -91,6 +107,9 @@ function initWebSocket(server) {
     ws.isAlive = true;
     ws.on('pong', () => (ws.isAlive = true));
 
+    // ===================================================
+    // ✉️ Mensajes entrantes
+    // ===================================================
     ws.on('message', async (raw) => {
       try {
         const msg = JSON.parse(raw);
@@ -98,21 +117,23 @@ function initWebSocket(server) {
 
         const payload = {
           from: userId,
-          role,
+          name,
           text: msg.text.trim(),
           timestamp: Date.now(),
           chatId,
         };
 
-        // Publicar en Redis
         await publisher.publish(chatId, JSON.stringify(payload));
       } catch (err) {
         console.error('❌ Error procesando mensaje:', err.message);
       }
     });
 
+    // ===================================================
+    // ❌ Desconexión
+    // ===================================================
     ws.on('close', () => {
-      console.log(`❌ WS cerrado userId=${userId} chatId=${chatId}`);
+      console.log(`⚪ WS desconectado: userId=${userId} chatId=${chatId}`);
       const clients = rooms.get(chatId);
       if (clients) {
         clients.delete(ws);
@@ -124,7 +145,9 @@ function initWebSocket(server) {
     });
   });
 
-  // Heartbeat
+  // ===================================================
+  // ❤️ Heartbeat (detectar clientes caídos)
+  // ===================================================
   setInterval(() => {
     wss.clients.forEach((ws) => {
       if (!ws.isAlive) return ws.terminate();
@@ -133,7 +156,7 @@ function initWebSocket(server) {
     });
   }, 30000);
 
-  console.log('⚡ WebSocket efímero inicializado (chatId-based)');
+  console.log('⚡ WebSocket efímero inicializado con validación JWT por cookie (at)');
 }
 
 module.exports = { initWebSocket };

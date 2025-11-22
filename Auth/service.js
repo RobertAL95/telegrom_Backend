@@ -1,69 +1,75 @@
 'use strict';
 
-const User = require('./model');
+// 👇 Importamos el modelo GLOBAL correcto
+const User = require('../globalModels/User'); 
 const bcrypt = require('bcrypt');
-const { sign } = require('../utils/jwt');
-const { publishEvent } = require('../events/publisher'); // importamos publisher
+const { publishEvent } = require('../events/publisher'); // (Si usas Redis)
 
 // ===================================================
-// 🔹 Registro de usuario
+// 🟢 Registro Manual (Email/Pass)
 // ===================================================
-exports.register = async (data) => {
-  const hashed = await bcrypt.hash(data.password, 10);
-  const user = new User({ ...data, password: hashed });
-  const saved = await user.save(); // guardamos usuario
+exports.register = async ({ name, email, password }) => {
+  const existing = await User.findOne({ email });
+  if (existing) throw new Error('El correo ya está registrado');
 
-  // Emitir evento al registrar un nuevo usuario
-  await publishEvent('UserRegistered', {
-    id: saved._id,
-    email: saved.email,
-    name: saved.name,
+  const hashed = await bcrypt.hash(password, 10);
+  
+  const user = await User.create({
+    name,
+    email,
+    password: hashed,
+    status: 'online' // Auto-online al registrarse
   });
 
-  return saved; // devuelve doc completo (sanitización en controller)
+  // Tracking opcional
+  if (publishEvent) publishEvent('UserRegistered', { id: user._id, type: 'manual' });
+
+  return user;
 };
 
 // ===================================================
-// 🔹 Login de usuario
+// 🟢 Login Manual
 // ===================================================
-exports.login = async (data) => {
-  const user = await User.findOne({ email: data.email });
-  if (!user) throw new Error('No encontrado');
+exports.login = async ({ email, password }) => {
+  // Buscamos usuario y verificamos password explícitamente
+  const user = await User.findOne({ email });
+  
+  if (!user) throw new Error('Credenciales inválidas');
+  
+  // Si el usuario se creó con Google, no tiene password
+  if (!user.password) throw new Error('Usa el inicio de sesión con Google');
 
-  const match = await bcrypt.compare(data.password, user.password);
-  if (!match) throw new Error('Credenciales inválidas');
+  const valid = await bcrypt.compare(password, user.password);
+  if (!valid) throw new Error('Credenciales inválidas');
 
-  return sign({ id: user._id, email: user.email }); // devuelve token (string)
+  return user;
 };
 
 // ===================================================
-// 🔹 OAuth Google / Facebook
+// 🟢 OAuth (Google Logic)
 // ===================================================
 exports.oauth = async (profile) => {
-  const email = profile.emails[0].value;
+  const email = profile.emails?.[0]?.value;
+  if (!email) throw new Error('Email no proporcionado por Google');
+
   let user = await User.findOne({ email });
 
   if (!user) {
-    user = await new User({ email, name: profile.displayName }).save();
-
-    // Emitir evento al crear usuario vía OAuth
-    await publishEvent('UserRegistered', {
-      id: user._id,
-      email: user.email,
-      name: user.name,
+    // Creamos usuario SIN password
+    user = await User.create({
+      name: profile.displayName || 'Usuario Google',
+      email,
+      avatar: profile.photos?.[0]?.value || null,
+      status: 'online'
     });
+
+    if (publishEvent) publishEvent('UserRegistered', { id: user._id, type: 'oauth' });
   }
 
-  return sign({ id: user._id, email: user.email });
+  return user;
 };
 
 // ===================================================
-// 🔹 Utilities para controller
+// 🧩 Utils
 // ===================================================
-exports.findById = async (id) => {
-  return User.findById(id).select('-password');
-};
-
-exports.findByEmail = async (email) => {
-  return User.findOne({ email }).select('-password');
-};
+exports.findById = async (id) => User.findById(id);

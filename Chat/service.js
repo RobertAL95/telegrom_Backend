@@ -1,112 +1,115 @@
-const Conversation = require('./model');
-const User = require('../Auth/model');
-const bcrypt = require('bcrypt');
-const jwtUtils = require('../utils/jwt');
+'use strict';
 
-// Obtener o crear conversación
+const Conversation = require('../globalModels/Conversation');
+const User = require('../globalModels/User');
+const UserGuest = require('../globalModels/UserGuest');
+
+// =======================================================
+// 🟢 Crear o recuperar conversación multiusuario
+// =======================================================
 exports.getOrCreateConversation = async (participants) => {
-  const participantIds = [];
+  const ids = [];
+  const models = [];
 
+  // -----------------------------------------------
+  // Validar que cada ID corresponde a User o Guest
+  // -----------------------------------------------
   for (const p of participants) {
-    if (p === 'guest') {
-      // Crear usuario temporal
-      const guestUser = new User({
-        name: 'Invitado',
-        email: `guest_${Date.now()}@flym.local`,
-        password: await bcrypt.hash(Math.random().toString(36).slice(-8), 10),
-        isGuest: true
-      });
-      await guestUser.save();
-      participantIds.push(guestUser._id);
-    } else {
-      participantIds.push(p);
+    const user =
+      await User.findById(p) ||
+      await UserGuest.findById(p);
+
+    if (!user) {
+      throw new Error('Usuario no encontrado: ' + p);
     }
+
+    ids.push(user._id);
+
+    // IMPORTANTE para Conversation.participantsModel
+    models.push(user.isGuest ? 'UserGuest' : 'User');
   }
 
-  // Buscar conversación existente con mismos participantes
+  // -----------------------------------------------
+  // Buscar conversación existente EXACTA
+  // -----------------------------------------------
   let convo = await Conversation.findOne({
-    participants: { $all: participantIds, $size: participantIds.length }
+    participants: { $all: ids, $size: ids.length }
   });
 
+  // -----------------------------------------------
+  // Crear conversación si no existe
+  // -----------------------------------------------
   if (!convo) {
-    convo = await Conversation.create({ participants: participantIds, messages: [] });
+    convo = await Conversation.create({
+      participants: ids,
+      participantsModel: models,
+      messages: []
+    });
   }
 
   return convo;
 };
 
-// Enviar mensaje
+// =======================================================
+// 🟢 Enviar mensaje (usuarios reales o invitados)
+// =======================================================
 exports.sendMessage = async (conversationId, senderId, text) => {
   const convo = await Conversation.findById(conversationId);
   if (!convo) throw new Error('Conversación no encontrada');
 
-  const message = { sender: senderId, text };
+  // -----------------------------------------------
+  // Validar sender y determinar modelo
+  // -----------------------------------------------
+  let sender = await User.findById(senderId);
+  let senderModel = 'User';
+
+  if (!sender) {
+    sender = await UserGuest.findById(senderId);
+    senderModel = 'UserGuest';
+  }
+
+  if (!sender) {
+    throw new Error('Sender inválido');
+  }
+
+  // -----------------------------------------------
+  // Crear mensaje con senderModel (refPath REQUIRED)
+  // -----------------------------------------------
+  const message = {
+    sender: sender._id,
+    senderModel,
+    text
+  };
+
   convo.messages.push(message);
   await convo.save();
 
   return message;
 };
 
-// Obtener mensajes
+// =======================================================
+// 🟢 Obtener mensajes con populate (User + UserGuest)
+// =======================================================
 exports.getMessages = async (conversationId) => {
   const convo = await Conversation.findById(conversationId)
-    .populate('messages.sender', 'name email');
+    .populate({
+      path: 'messages.sender',
+      select: 'name email avatar'
+    });
+
   if (!convo) throw new Error('Conversación no encontrada');
 
   return convo.messages;
 };
 
-// Obtener conversaciones de usuario
+// =======================================================
+// 🟢 Obtener conversaciones por usuario real o invitado
+// =======================================================
 exports.getByUser = async (userId) => {
-  return await Conversation.find({ participants: userId }).populate('participants', 'name email');
-};
-
-// Generar link de invitación
-exports.generateInvite = async (inviterId) => {
-  // 1. Crear conversación vacía si no existe
-  const convo = await Conversation.create({
-    participants: [inviterId],
-    messages: []
-  });
-
-  // 2. Generar token con chatId incluido
-  const token = jwtUtils.sign({
-    inviterId,
-    chatId: convo._id,
-    role: 'inviter'
-  });
-
-  // 3. Generar link con ese chatId
-  const link = `${process.env.FRONTEND_URL}/chat/${convo._id}?invite=${token}`;
-  return link;
-};
-
-
-// Aceptar invitación
-exports.acceptInvite = async (token, guestName) => {
-  const decoded = jwtUtils.verify(token);
-  const { inviterId, chatId } = decoded;
-
-  // Validar conversación existente
-  const convo = await Conversation.findById(chatId);
-  if (!convo) throw new Error('Chat no encontrado');
-
-  // Crear invitado
-  const guest = new User({ name: guestName, isGuest: true });
-  await guest.save();
-
-  // Agregar invitado a la conversación (si no está)
-  if (!convo.participants.includes(guest._id)) {
-    convo.participants.push(guest._id);
-    await convo.save();
-  }
-
-  // Generar token de sesión para el invitado (opcional)
-  const sessionToken = jwtUtils.sign({
-    userId: guest._id,
-    chatId,
-    role: 'guest'
-  });
-
-  return { convo, sessionToken };
+  return await Conversation.find({ participants: userId })
+    .populate({
+      path: 'participants',
+      select: 'name email avatar'
+    })
+    .sort({ updatedAt: -1 });
 };

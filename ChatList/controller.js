@@ -1,3 +1,4 @@
 const service = require('./service');
-exports.addContact = service.addContact;
-exports.getContacts = service.getContacts;
+
+exports.addContact = (params) => service.addContact(params);
+exports.getContacts = (userId) => service.getContacts(userId);
