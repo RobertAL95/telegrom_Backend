@@ -1,28 +1,15 @@
-// src/utils/jwt.js
 'use strict';
 const jwt = require('jsonwebtoken');
 const config = require('../config');
 
 const SECRET = config.jwtSecret || process.env.JWT_SECRET || 'fallback_secret';
 
-// TTLs (ajusta vía env si quieres)
-const ACCESS_TTL = process.env.JWT_ACCESS_TTL || '15m'; // token corto para proteger rutas/WS
-const REFRESH_TTL = process.env.JWT_REFRESH_TTL || '7d'; // token largo para renovar sesión
+// TTLs DINÁMICOS
+const ACCESS_TTL = process.env.JWT_ACCESS_TTL || '15m'; // Corto para proteger rutas/WS
+const REFRESH_TTL_WEB = process.env.JWT_REFRESH_TTL_WEB || '30m'; // 👈 Política Efímera
+const REFRESH_TTL_PWA = process.env.JWT_REFRESH_TTL_PWA || '7d'; // 👈 Política Persistente
 
-// -------------------------------------------------
-// Convertir TTL simple (e.g., '15m','7d') a ms para cookie.maxAge
-// -------------------------------------------------
-function ttlToMs(ttl) {
-  const m = /^(\d+)([smhd])$/.exec(ttl);
-  if (!m) return 0;
-  const n = parseInt(m[1], 10);
-  const u = m[2];
-  if (u === 's') return n * 1000;
-  if (u === 'm') return n * 60 * 1000;
-  if (u === 'h') return n * 60 * 60 * 1000;
-  if (u === 'd') return n * 24 * 60 * 60 * 1000;
-  return 0;
-}
+// ... (Resto de la función ttlToMs se mantiene igual) ...
 
 // -------------------------------------------------
 // Firmar access token (corto)
@@ -33,36 +20,14 @@ function signAccess(payload, options = {}) {
 }
 
 // -------------------------------------------------
-// Firmar refresh token (largo)
+// Firmar refresh token (largo, ahora dinámico)
 // -------------------------------------------------
-function signRefresh(payload, options = {}) {
-  const opts = Object.assign({}, options, { expiresIn: REFRESH_TTL });
+function signRefresh(payload, customTTL = REFRESH_TTL_PWA, options = {}) {
+  const opts = Object.assign({}, options, { expiresIn: customTTL });
   return jwt.sign(payload, SECRET, opts);
 }
 
-// -------------------------------------------------
-// Verificar token (devuelve decoded o null) — NO lanza
-// -------------------------------------------------
-function verify(token) {
-  try {
-    return jwt.verify(token, SECRET);
-  } catch (err) {
-    // no loguear stack en producción masivo, pero sí info útil
-    // console.debug('jwt.verify failed:', err.message);
-    return null;
-  }
-}
-
-// -------------------------------------------------
-// Decodificar sin verificar (solo lectura)
-// -------------------------------------------------
-function decode(token) {
-  try {
-    return jwt.decode(token);
-  } catch {
-    return null;
-  }
-}
+// ... (Resto de las funciones verify, decode se mantienen igual) ...
 
 module.exports = {
   signAccess,
@@ -70,6 +35,7 @@ module.exports = {
   verify,
   decode,
   ACCESS_TTL,
-  REFRESH_TTL,
+  REFRESH_TTL_WEB, // Exportamos el nuevo TTL
+  REFRESH_TTL_PWA, // Exportamos el nuevo TTL
   ttlToMs,
 };

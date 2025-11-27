@@ -11,7 +11,7 @@ const authRoutes = require('../Auth/network');
 const chatRoutes = require('../Chat/network');
 const chatListRoutes = require('../ChatList/network');
 const inviteRoutes = require('../Invite/network');
-
+const mediaProxyRoutes = require('../MediaProxy/network');
 // ===================================================
 // 🔓 Rutas Públicas (Public Layer)
 // ===================================================
@@ -42,6 +42,8 @@ router.get('/', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+router.use('/media', mediaProxyRoutes);
 
 // ===================================================
 // 🚫 Catch-All 404 (Para evitar HTML en la API)
