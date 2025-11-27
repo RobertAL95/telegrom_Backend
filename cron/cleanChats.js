@@ -5,68 +5,85 @@ const mongoose = require('mongoose');
 const { mongoURI } = require('../config');
 const Conversation = require('../globalModels/Conversation');
 const UserGuest = require('../globalModels/UserGuest');
-// const TempFiles = require('../Files/model'); // Si tuvieras un modelo de archivos temporales
 
-// ⌛ Define el umbral de inactividad (ej. 7 días, expresado en milisegundos)
-// 7 * 24 * 60 * 60 * 1000
+// ⌛ Umbral de inactividad: 7 días (para invitados)
 const INACTIVITY_THRESHOLD_MS = 604800000; 
 
 /**
  * Función principal para conectar, limpiar y desconectar.
  */
 async function runCleanup() {
-    let connection;
-    try {
-        console.log('🔄 Iniciando proceso de limpieza cron...');
-        
-        // 1. Conexión a MongoDB
-        connection = await mongoose.connect(mongoURI, {
-            serverSelectionTimeoutMS: 5000, 
-            maxPoolSize: 1 // No necesita muchas conexiones
-        });
-        console.log('✅ Conexión MongoDB establecida.');
+    let connection;
+    let exitCode = 0;
+    try {
+        console.log('🔄 Iniciando proceso de limpieza cron...');
+        
+        // 1. Conexión a MongoDB (Usando el pool de conexión principal, pero con maxPoolSize 1 para la tarea)
+        connection = await mongoose.connect(mongoURI, {
+            serverSelectionTimeoutMS: 5000, 
+            maxPoolSize: 1 
+        });
+        console.log('✅ Conexión MongoDB establecida.');
 
-        // 2. Definir el punto de corte
-        const cutoffDate = new Date(Date.now() - INACTIVITY_THRESHOLD_MS);
+        // 2. Definir el punto de corte
+        const cutoffDate = new Date(Date.now() - INACTIVITY_THRESHOLD_MS);
+        
+        // ========================================================
+        // 🧹 TAREA 1: Identificar y Eliminar Usuarios Invitados Inactivos
+        // ========================================================
         
-        // ========================================================
-        // 🧹 TAREA A: Limpiar Conversaciones MUY Antiguas y de Invitados
-        // ========================================================
-        
-        // Estrategia: Buscar conversaciones que solo tengan invitados 
-        // y que no se hayan actualizado en el umbral.
-        
-        // Para esto necesitaríamos el ID del modelo UserGuest. 
-        // Simplificaremos asumiendo que el campo UserGuest.isGuest = true es suficiente.
-        
-        // Por la complejidad de esta consulta, la omitimos y nos centramos
-        // en lo más seguro: limpiar Invitados inactivos.
-
-        // ========================================================
-        // 🧹 TAREA B: Limpiar Usuarios Invitados Inactivos (Menos destructivo)
-        // ========================================================
-        
-        const resultGuests = await UserGuest.deleteMany({
+        // Obtenemos los IDs de los invitados que serán eliminados
+        const guestsToDelete = await UserGuest.find({
             createdAt: { $lt: cutoffDate }
-        });
+        }, '_id'); // Solo necesitamos el campo _id
 
-        console.log(`🗑️ Usuarios invitados inactivos eliminados: ${resultGuests.deletedCount}`);
+        const guestIds = guestsToDelete.map(g => g._id);
 
-        // 3. Puedes agregar aquí TAREA C: Limpiar archivos multimedia temporales
+        if (guestIds.length > 0) {
+            
+            // 🔥 Ejecución de la eliminación
+            const resultGuests = await UserGuest.deleteMany({ _id: { $in: guestIds } });
+            console.log(`🗑️ Usuarios invitados inactivos eliminados: ${resultGuests.deletedCount}`);
 
-        console.log('✅ Proceso de limpieza finalizado con éxito.');
-
-    } catch (err) {
-        console.error('❌ Error crítico en el cron:', err.message);
-        process.exitCode = 1;
-    } finally {
-        // 4. Desconexión
-        if (connection) {
-            await mongoose.disconnect();
-            console.log('🍃 Conexión MongoDB cerrada.');
+            // ========================================================
+            // 🧹 TAREA 2: Limpieza en Cascada (Cascade Cleanup)
+            // ========================================================
+            
+            // Remover los IDs de los invitados eliminados de todas las conversaciones.
+            const resultConvoUpdate = await Conversation.updateMany(
+                { participants: { $in: guestIds } },
+                { $pull: { participants: { $in: guestIds } } }
+            );
+            console.log(`🧼 Conversaciones actualizadas: ${resultConvoUpdate.modifiedCount} (participantes removidos).`);
+            
+            // ⚠️ Limpieza Opcional: Eliminar conversaciones que quedan vacías o con solo un User
+            // Decisión de Arquitectura: Recomendamos dejar la conversación si queda el User REAL, 
+            // pero si queda completamente vacía, se puede eliminar.
+            const resultConvoDelete = await Conversation.deleteMany({
+                 participants: { $size: 0 } 
+            });
+            console.log(`🗑️ Conversaciones vacías eliminadas: ${resultConvoDelete.deletedCount}`);
+            
+        } else {
+            console.log('✅ No se encontraron invitados inactivos para eliminar.');
         }
-        process.exit(process.exitCode);
-    }
+
+
+        // 3. TAREA C: Limpiar archivos multimedia temporales (pendiente de implementación)
+
+        console.log('✅ Proceso de limpieza finalizado con éxito.');
+
+    } catch (err) {
+        console.error('❌ Error crítico en el cron:', err.message);
+        exitCode = 1; // Marcar fallo
+    } finally {
+        // 4. Desconexión
+        if (connection) {
+            await mongoose.disconnect();
+            console.log('🍃 Conexión MongoDB cerrada.');
+        }
+        process.exit(exitCode);
+    }
 }
 
 // Ejecutar el proceso

@@ -1,6 +1,9 @@
 'use strict';
 require('dotenv').config();
 
+// 🔥 CRÍTICO: Inicializar el logger ANTES de cualquier otro require
+require('./utils/logger'); 
+
 const express = require('express');
 const http = require('http');
 const mongoose = require('mongoose');
@@ -38,9 +41,9 @@ const PORT = config.port || 4000;
       maxPoolSize: 10,
       serverSelectionTimeoutMS: 5000,
     });
-    console.log('✅ MongoDB conectado');
+    console.log('✅ MongoDB conectado'); // Esto ya es log estructurado
   } catch (err) {
-    console.error('❌ Error conectando a MongoDB:', err.message);
+    console.error('❌ Error conectando a MongoDB:', err.message); // Esto ya es log estructurado
     process.exit(1);
   }
 })();
@@ -74,7 +77,7 @@ app.use(
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        console.warn(`🚫 CORS bloqueado para origen: ${origin}`);
+        console.warn(`🚫 CORS bloqueado para origen: ${origin}`); // Log estructurado
         callback(new Error('Origen no permitido por CORS'));
       }
     },
@@ -111,11 +114,10 @@ app.get('/health', (req, res) => {
 // ===================================================
 
 // 1. Inicializar y registrar Handlers de Eventos
-// Esto registra las funciones de escucha de CADA MÓDULO en el Dispatcher central.
 authHandlers.init();    
 chatHandlers.init();    
 inviteHandlers.init();  
-console.log('✅ Handlers de eventos registrados.');
+console.log('✅ Handlers de eventos registrados.'); // Log estructurado
 
 // 2. Iniciar la escucha de eventos (Redis SUBSCRIBE)
 initSubscriber(); 
@@ -127,19 +129,19 @@ initWSS(server);
 // 🚀 Lanzar servidor
 // ===================================================
 const runningServer = server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Servidor backend corriendo en puerto ${PORT}`);
-  console.log(`🌐 Acceso: http://localhost:${PORT}`);
+  console.log(`🚀 Servidor backend corriendo en puerto ${PORT}`); // Log estructurado
+  console.log(`🌐 Acceso: http://localhost:${PORT}`); // Log estructurado
 });
 
 // ===================================================
 // 🛑 Graceful Shutdown (Muerte Digna)
 // ===================================================
 async function gracefulShutdown(signal) {
-  console.log(`\n🛑 Recibida señal ${signal}. Cerrando ordenadamente...`);
+  console.log(`\n🛑 Recibida señal ${signal}. Cerrando ordenadamente...`); // Log estructurado
 
   // 1. Dejar de aceptar nuevas conexiones HTTP
   runningServer.close(() => {
-    console.log('🌑 Servidor HTTP cerrado.');
+    console.log('🌑 Servidor HTTP cerrado.'); // Log estructurado
   });
 
   try {
@@ -148,12 +150,12 @@ async function gracefulShutdown(signal) {
 
     // 3. Cerrar conexión MongoDB
     await mongoose.connection.close(false);
-    console.log('🍃 Conexión MongoDB cerrada.');
+    console.log('🍃 Conexión MongoDB cerrada.'); // Log estructurado
 
-    console.log('✅ Cierre completado con éxito.');
+    console.log('✅ Cierre completado con éxito.'); // Log estructurado
     process.exit(0);
   } catch (err) {
-    console.error('❌ Error durante el cierre:', err);
+    console.error('❌ Error durante el cierre:', err); // Log estructurado
     process.exit(1);
   }
 }
@@ -165,12 +167,17 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // ===================================================
 // 🧹 Manejo de errores no capturados
 // ===================================================
+
+// Los handlers de Winston ya gestionan y terminan el proceso de forma segura.
+// Podemos simplificar la sintaxis.
+
 process.on('unhandledRejection', (reason) => {
-  console.error('❌ Rechazo no manejado:', reason);
+  console.error('❌ Rechazo no manejado:', reason); // Gestionado por Winston.rejectionHandlers
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('❌ Excepción no capturada:', err);
-  // Para errores críticos no manejados, reiniciamos el proceso
+  console.error('❌ Excepción no capturada:', err); // Gestionado por Winston.exceptionHandlers
+  // El handler de Winston ya debe terminar el proceso de forma segura, 
+  // pero mantenemos process.exit(1) como fallback.
   process.exit(1);
 });

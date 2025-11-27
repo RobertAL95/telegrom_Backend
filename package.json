@@ -29,6 +29,7 @@
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "rate-limit-redis": "^4.3.0",
+    "winston": "^3.18.3",
     "ws": "^8.13.0",
     "zod": "^3.25.76"
   },
