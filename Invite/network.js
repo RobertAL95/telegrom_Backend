@@ -1,73 +1,27 @@
 'use strict';
+
 const express = require('express');
 const router = express.Router();
-const response = require('../network/response');
 const controller = require('./controller');
-const auth = require('../middleware'); // se usa SOLO en POST /invite
+const auth = require('../middleware'); // Asegúrate que la ruta al middleware sea correcta
 
-/* ===================================================
-   🟢 Crear link de invitación (solo anfitrión logueado)
-   POST /invite
-   Protected
-=================================================== */
-router.post('/', auth, async (req, res) => {
-  try {
-    const userId = req.user?.id;
-    if (!userId) return response.error(req, res, 'No autenticado', 401);
+// =====================================================================
+// 🟢 RUTAS DE INVITACIÓN
+// =====================================================================
 
-    const { link, chatId } = await controller.createInvite(userId);
+// 1. Crear invitación
+// POST /invite
+// El controlador recibe (req, res), extrae el usuario y responde.
+router.post('/', auth, controller.createInvite);
 
-    return response.success(req, res, { link, chatId }, 200);
-  } catch (e) {
-    console.error('❌ Error al generar invitación:', e.message);
-    return response.error(req, res, e.message, 500);
-  }
-});
+// 2. Validar token (para la UI)
+// GET /invite/validate/:token
+// El controlador recibe (req, res) y responde si es válido o no.
+router.get('/validate/:token', controller.validateToken);
 
-/* ===================================================
-   🟡 Validar token de invitación
-   GET /invite/validate/:token
-   Público
-=================================================== */
-router.get('/validate/:token', async (req, res) => {
-  try {
-    const { token } = req.params;
-
-    const valid = await controller.validateInvite(token);
-
-    // 👈 Respuesta consistente con frontend
-    return response.success(req, res, { valid }, 200);
-  } catch (e) {
-    console.error('❌ Error en validateInvite:', e.message);
-    return response.error(req, res, e.message, 400);
-  }
-});
-
-/* ===================================================
-   🟢 Aceptar invitación
-   POST /invite/accept
-   Público
-=================================================== */
-router.post('/accept', async (req, res) => {
-  try {
-    const { token, guestName } = req.body;
-
-    if (!token)
-      return response.error(req, res, 'Token requerido', 400);
-
-    // guestName ahora es opcional, controller lo normaliza
-    const result = await controller.acceptInvite(token, guestName);
-
-    // 👈 compatibilidad 100% con frontend
-    return response.success(req, res, {
-      roomId: result.roomId,
-      guestToken: result.guestToken,
-      guestId: result.guestId
-    }, 201);
-  } catch (e) {
-    console.error('❌ Error en acceptInvite:', e.message);
-    return response.error(req, res, e.message, 400);
-  }
-});
+// 3. Aceptar invitación
+// POST /invite/accept
+// El controlador recibe (req, res), crea el usuario, PONE LA COOKIE y responde.
+router.post('/accept', controller.acceptInvite);
 
 module.exports = router;

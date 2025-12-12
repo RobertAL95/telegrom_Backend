@@ -4,7 +4,7 @@ const MessageSchema = new mongoose.Schema({
   sender: { 
     type: mongoose.Schema.Types.ObjectId, 
     required: true,
-    refPath: "messages.senderModel" // ⚠️ Ojo al path relativo
+    refPath: "messages.senderModel" // Referencia dinámica interna
   },
   senderModel: {
     type: String,
@@ -16,28 +16,27 @@ const MessageSchema = new mongoose.Schema({
 });
 
 const ConversationSchema = new mongoose.Schema({
-  // 🔥 CORRECCIÓN: Estructura unificada para Polymorphism
-  participants: [
-    {
-      _id: false, // Evitamos crear sub-ids innecesarios
-      data: {
-        type: mongoose.Schema.Types.ObjectId,
-        required: true,
-        refPath: "participants.model" // Referencia dinámica
-      },
-      model: {
-        type: String,
-        required: true,
-        enum: ["User", "UserGuest"]
-      }
-    }
-  ],
+  // 🔥 CORRECCIÓN CRÍTICA:
+  // Cambiamos 'participants' a un array simple de IDs para que coincida con tu Service.
+  // Usamos refPath para que el populate sepa si buscar en 'User' o 'UserGuest'.
+  participants: [{
+    type: mongoose.Schema.Types.ObjectId,
+    required: true,
+    refPath: 'participantsModel' // <--- Mongoose mirará el array paralelo
+  }],
+
+  // Agregamos este campo que tu service.js YA estaba intentando guardar
+  participantsModel: [{
+    type: String,
+    required: true,
+    enum: ["User", "UserGuest"]
+  }],
   
   messages: [MessageSchema],
   lastMessage: { type: String, default: "" },
 }, { timestamps: true });
 
-// Middleware para lastMessage
+// Middleware para actualizar lastMessage automáticamente
 ConversationSchema.pre("save", function(next) {
   if (this.messages && this.messages.length > 0) {
     this.lastMessage = this.messages[this.messages.length - 1].text;

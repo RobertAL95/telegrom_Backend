@@ -1,7 +1,7 @@
 'use strict';
 
-const { verify, decode } = require('./utils/jwt');
-const revocationService = require('./Auth/service/sessionRevocation'); // <-- Ruta corregida
+const { verify, decode } = require('../utils/jwt');
+const revocationService = require('../Auth/sessionRevocation'); // <-- Ruta corregida
 
 // ===================================================
 // 🛡️ Middleware de Autenticación (Usuario Real o Invitado)

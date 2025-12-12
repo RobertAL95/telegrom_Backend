@@ -1,34 +1,30 @@
-// middlewares/rateLimiter.js
+// middleware/rateLimiter.js
 'use strict';
 
 const rateLimit = require('express-rate-limit');
-const RedisStore = require('@rate-limit/redis').RedisStore;
-const redis = require('../../utils/redis'); // Tu cliente ioredis
+const { RedisStore } = require('rate-limit-redis'); 
+const redis = require('../utils/redis'); 
 
 // ===================================================
 // 1. Cliente de Redis para el Store
 // ===================================================
-// Usamos el cliente duplicado para evitar conflictos con Pub/Sub o sesiones
 const redisClient = redis.createClient();
 
 // ===================================================
 // 2. Limitador de Tráfico Público (IP-Based)
 // ===================================================
 const publicLimiter = rateLimit({
-    // Contador distribuido usando Redis
     store: new RedisStore({ 
         sendCommand: (...args) => redisClient.call(...args),
-        // Puedes configurar un prefijo para distinguir las claves de limitación de tasa
         prefix: 'rl:public:', 
     }),
-
-    windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 100, // Máximo 100 peticiones por ventana (por IP)
-    standardHeaders: true, // Incluye headers RateLimit-* en la respuesta
-    legacyHeaders: false, // Deshabilita X-RateLimit-* headers
+    windowMs: 15 * 60 * 1000, // 15 min
+    max: 100, 
+    standardHeaders: true,
+    legacyHeaders: false,
     message: {
         ok: false,
-        message: 'Demasiadas solicitudes, inténtalo más tarde. Límite: 100 por 15 minutos.',
+        message: 'Demasiadas solicitudes, inténtalo más tarde.',
     },
 });
 
@@ -40,30 +36,35 @@ const authStrictLimiter = rateLimit({
         sendCommand: (...args) => redisClient.call(...args),
         prefix: 'rl:auth:',
     }),
-    windowMs: 5 * 60 * 1000, // 5 minutos
-    max: 5, // Máximo 5 peticiones por ventana (por IP)
+    windowMs: 5 * 60 * 1000, // 5 min
+    max: 5,
     standardHeaders: true,
     legacyHeaders: false,
     message: {
         ok: false,
-        message: 'Demasiados intentos de autenticación. Espera 5 minutos.',
+        message: 'Demasiados intentos. Espera 5 minutos.',
     },
 });
 
 // ===================================================
 // 4. Limitador por Usuario (User-Based)
 // ===================================================
-// Esto se usa en rutas protegidas donde el usuario está logueado (req.user existe)
 const userLimiter = rateLimit({
     store: new RedisStore({ 
         sendCommand: (...args) => redisClient.call(...args),
         prefix: 'rl:user:',
     }),
-    windowMs: 60 * 1000, // 1 minuto
-    max: 30, // Máximo 30 peticiones por minuto (por usuario)
+    windowMs: 60 * 1000, // 1 min
+    max: 30,
     keyGenerator: (req, res) => {
         // Usa el ID del usuario si está disponible, si no, usa la IP.
         return req.user?.id || req.ip; 
+    },
+    // 🔥 CORRECCIÓN: Desactivamos la validación estricta de IP
+    // ya que confiamos en req.ip proporcionado por Express trust proxy
+    validate: {
+        ip: false,
+        trustProxy: false 
     },
     standardHeaders: true,
     legacyHeaders: false,

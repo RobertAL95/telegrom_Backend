@@ -1,20 +1,21 @@
 'use strict';
 
 const { signAccess, verify } = require('../utils/jwt');
-const User = require('../globalModels/User');           // modelo GLOBAL
-const UserGuest = require('../globalModels/UserGuest'); // modelo GLOBAL nuevo
-const Conversation = require('../globalModels/Conversation'); // modelo GLOBAL
+const User = require('../globalModels/User');
+const UserGuest = require('../globalModels/UserGuest');
+const Conversation = require('../globalModels/Conversation');
 const { publishEvent } = require('../events/publisher');
 
 // ===================================================
 // 🟢 Crear invitación (host ya logueado)
-// Crea un chat vacío y genera un TOKEN DE INVITACIÓN
 // ===================================================
 exports.createInvite = async (userId) => {
   try {
-    // 1) Crear conversación vacía donde el host ya está adentro
+    // 1) Crear conversación vacía
+    // Guardamos participantsModel para coincidir con el Schema nuevo
     const convo = await Conversation.create({
       participants: [userId],
+      participantsModel: ['User'], // Asumimos que el creador es un User registrado
       messages: [],
     });
 
@@ -25,19 +26,19 @@ exports.createInvite = async (userId) => {
       type: 'invite-token',
     });
 
-    // 3) Codificar para URLs
+    // 3) Generar link
     const safeToken = encodeURIComponent(token);
-
-    // 4) Generar link directo para el frontend
     const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const link = `${baseUrl}/invite/${safeToken}`;
 
-    // 🔥 Evento opcional (analytics/monitoring)
-    await publishEvent?.('InviteCreated', {
-      inviter: userId,
-      chatId: convo._id.toString(),
-      link,
-    });
+    // Evento (Analytics)
+    if (publishEvent) {
+      await publishEvent('InviteCreated', {
+        inviter: userId,
+        chatId: convo._id.toString(),
+        link,
+      });
+    }
 
     return { link, chatId: convo._id.toString() };
   } catch (e) {
@@ -48,13 +49,11 @@ exports.createInvite = async (userId) => {
 
 // ===================================================
 // 🟡 Validar token de invitación
-// Solo verifica si el token es válido para mostrar UI al usuario
 // ===================================================
 exports.validateInvite = async (token) => {
   try {
     const realToken = decodeURIComponent(token);
     const decoded = verify(realToken);
-
     return !!decoded?.chatId;
   } catch (e) {
     console.error('❌ validateInvite:', e.message);
@@ -63,8 +62,7 @@ exports.validateInvite = async (token) => {
 };
 
 // ===================================================
-// 🟢 Aceptar invitación y unir invitado a un chat existente
-// Soporta múltiples invitados al mismo chat
+// 🟢 Aceptar invitación (Fix InviterId + ChatId + Models)
 // ===================================================
 exports.acceptInvite = async (token, guestName) => {
   try {
@@ -80,41 +78,43 @@ exports.acceptInvite = async (token, guestName) => {
     if (!convo) throw new Error('El chat no existe');
 
     // 2) Crear usuario invitado efímero
+    // 🔥 AQUÍ ESTÁ EL FIX: Agregamos 'chatId' que faltaba
     const guest = await UserGuest.create({
       name: guestName,
-      inviter: inviter,
-      chatId: chatId,
+      email: `guest_${Date.now()}_${Math.floor(Math.random() * 1000)}@flym.temp`,
+      inviterId: inviter, // Requerido por Schema
+      chatId: chatId,     // Requerido por Schema (El que fallaba)
+      isGuest: true
     });
 
     // 3) Añadir invitado al chat (multiusuario)
-    await Conversation.findByIdAndUpdate(chatId, {
-      $addToSet: { participants: guest._id },
-    });
+    // Sincronizamos participants y participantsModel manualmente
+    const isAlreadyIn = convo.participants.some(p => p.toString() === guest._id.toString());
+    
+    if (!isAlreadyIn) {
+        convo.participants.push(guest._id);
+        convo.participantsModel.push('UserGuest'); // Indispensable para el nuevo Schema
+        await convo.save();
+    }
 
-    // 4) Crear token efímero de sesión del invitado
-    const guestToken = signAccess({
-      id: guest._id.toString(),
-      chatId,
-      inviter,
-      isGuest: true,
-      role: 'guest',
-    });
+    // Evento
+    if (publishEvent) {
+      await publishEvent('InviteAccepted', {
+        chatId,
+        inviter,
+        guestId: guest._id.toString(),
+        guestName,
+      });
+    }
 
-    // 🔥 Evento opcional
-    await publishEvent?.('InviteAccepted', {
-      chatId,
-      inviter,
-      guestId: guest._id.toString(),
-      guestName,
-    });
-
+    // Retornamos el objeto para que el Controller genere la cookie
     return {
+      user: guest,
       roomId: chatId,
-      guestToken,
-      guestId: guest._id.toString(),
+      inviterId: inviter,
     };
   } catch (e) {
     console.error('❌ Error en acceptInvite:', e);
-    throw new Error('No se pudo aceptar la invitación');
+    throw e; 
   }
 };

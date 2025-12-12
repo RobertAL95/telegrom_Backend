@@ -16,10 +16,10 @@ const routes = require('./network/routes');
 
 // Importaciones de Sistemas Globales
 const { initWSS, closeRedis } = require('./wsServer');
-const { initSubscriber } = require('./events/dispatcher'); // 🔄 Inicializador de Eventos Desacoplados
-const { publicLimiter } = require('./network/middlewares/rateLimiter'); // 🚦 Rate Limiter Distribuido
+const { initSubscriber } = require('./events/dispatcher'); 
+const { publicLimiter } = require('./middleware/rateLimiter'); 
 
-// Importar los inicializadores de Handlers de CADA MÓDULO (para el desacoplamiento)
+// Importar los inicializadores de Handlers
 const authHandlers = require('./Auth/events/handlers'); 
 const chatHandlers = require('./Chat/events/handlers'); 
 const inviteHandlers = require('./Invite/events/handlers'); 
@@ -35,17 +35,17 @@ const PORT = config.port || 4000;
 // 🍃 Conexión MongoDB Robusta
 // ===================================================
 (async () => {
-  try {
-    mongoose.set('strictQuery', true);
-    await mongoose.connect(config.mongoURI, {
-      maxPoolSize: 10,
-      serverSelectionTimeoutMS: 5000,
-    });
-    console.log('✅ MongoDB conectado'); // Esto ya es log estructurado
-  } catch (err) {
-    console.error('❌ Error conectando a MongoDB:', err.message); // Esto ya es log estructurado
-    process.exit(1);
-  }
+  try {
+    mongoose.set('strictQuery', true);
+    await mongoose.connect(config.mongoURI, {
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 5000,
+    });
+    console.log('✅ MongoDB conectado'); 
+  } catch (err) {
+    console.error('❌ Error conectando a MongoDB:', err.message); 
+    process.exit(1);
+  }
 })();
 
 // ===================================================
@@ -56,128 +56,110 @@ app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
 app.use(compression());
 app.use(
-  helmet({
-    crossOriginResourcePolicy: false,
-    crossOriginOpenerPolicy: false,
-  })
+  helmet({
+    crossOriginResourcePolicy: false,
+    crossOriginOpenerPolicy: false,
+  })
 );
 
 // ===================================================
 // 🌐 Configuración CORS segura
 // ===================================================
 const allowedOrigins = [
-  'http://localhost:3000',
-  'https://localhost:3000',
-  config.frontendUrl,
+  'http://localhost:3000',
+  'https://localhost:3000',
+  'http://127.0.0.1:3000', // IP para evitar bloqueos locales
+  config.frontendUrl,
 ].filter(Boolean);
 
 app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.warn(`🚫 CORS bloqueado para origen: ${origin}`); // Log estructurado
-        callback(new Error('Origen no permitido por CORS'));
-      }
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  })
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`🚫 CORS bloqueado para origen: ${origin}`);
+        callback(new Error('Origen no permitido por CORS'));
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Client-Device'],
+  })
 );
 
 // ===================================================
-// 🚦 Rate Limiter (Distribuido con Redis)
+// 🚦 Rate Limiter
 // ===================================================
 app.use(publicLimiter); 
 
+// 🔥 CORRECCIÓN APLICADA AQUÍ 🔥
 // ===================================================
-// 🧠 Rutas principales
+// 🩺 Endpoint de healthcheck (PRIMERO)
+// ===================================================
+// Debe ir ANTES de app.use('/', routes) para evitar que el 404 lo capture
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    ok: true,
+    uptime: process.uptime(),
+    env: config.nodeEnv,
+    mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+  });
+});
+
+// ===================================================
+// 🧠 Rutas principales (SEGUNDO)
 // ===================================================
 app.use('/', routes);
 
 // ===================================================
-// 🩺 Endpoint de healthcheck
-// ===================================================
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    ok: true,
-    uptime: process.uptime(),
-    env: config.nodeEnv,
-    mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-  });
-});
-
-// ===================================================
 // ⚡ Inicializar Sistemas Asíncronos
 // ===================================================
-
-// 1. Inicializar y registrar Handlers de Eventos
 authHandlers.init();    
 chatHandlers.init();    
 inviteHandlers.init();  
-console.log('✅ Handlers de eventos registrados.'); // Log estructurado
+console.log('✅ Handlers de eventos registrados.'); 
 
-// 2. Iniciar la escucha de eventos (Redis SUBSCRIBE)
 initSubscriber(); 
-
-// 3. Inicializar WebSockets (conexiones real-time)
 initWSS(server);
 
 // ===================================================
 // 🚀 Lanzar servidor
 // ===================================================
 const runningServer = server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Servidor backend corriendo en puerto ${PORT}`); // Log estructurado
-  console.log(`🌐 Acceso: http://localhost:${PORT}`); // Log estructurado
+  console.log(`🚀 Servidor backend corriendo en puerto ${PORT}`); 
+  console.log(`🌐 Acceso: http://localhost:${PORT}`); 
 });
 
 // ===================================================
-// 🛑 Graceful Shutdown (Muerte Digna)
+// 🛑 Graceful Shutdown
 // ===================================================
 async function gracefulShutdown(signal) {
-  console.log(`\n🛑 Recibida señal ${signal}. Cerrando ordenadamente...`); // Log estructurado
+  console.log(`\n🛑 Recibida señal ${signal}. Cerrando ordenadamente...`);
+  runningServer.close(() => {
+    console.log('🌑 Servidor HTTP cerrado.');
+  });
 
-  // 1. Dejar de aceptar nuevas conexiones HTTP
-  runningServer.close(() => {
-    console.log('🌑 Servidor HTTP cerrado.'); // Log estructurado
-  });
-
-  try {
-    // 2. Cerrar conexiones WebSocket, Redis y Dispatcher
-    await closeRedis();
-
-    // 3. Cerrar conexión MongoDB
-    await mongoose.connection.close(false);
-    console.log('🍃 Conexión MongoDB cerrada.'); // Log estructurado
-
-    console.log('✅ Cierre completado con éxito.'); // Log estructurado
-    process.exit(0);
-  } catch (err) {
-    console.error('❌ Error durante el cierre:', err); // Log estructurado
-    process.exit(1);
-  }
+  try {
+    await closeRedis();
+    await mongoose.connection.close(false);
+    console.log('🍃 Conexión MongoDB cerrada.');
+    console.log('✅ Cierre completado con éxito.');
+    process.exit(0);
+  } catch (err) {
+    console.error('❌ Error durante el cierre:', err);
+    process.exit(1);
+  }
 }
 
-// Capturar señales de terminación del sistema (Docker stop, Ctrl+C)
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// ===================================================
-// 🧹 Manejo de errores no capturados
-// ===================================================
-
-// Los handlers de Winston ya gestionan y terminan el proceso de forma segura.
-// Podemos simplificar la sintaxis.
-
 process.on('unhandledRejection', (reason) => {
-  console.error('❌ Rechazo no manejado:', reason); // Gestionado por Winston.rejectionHandlers
+  console.error('❌ Rechazo no manejado:', reason); 
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('❌ Excepción no capturada:', err); // Gestionado por Winston.exceptionHandlers
-  // El handler de Winston ya debe terminar el proceso de forma segura, 
-  // pero mantenemos process.exit(1) como fallback.
-  process.exit(1);
+  console.error('❌ Excepción no capturada:', err);
+  process.exit(1);
 });

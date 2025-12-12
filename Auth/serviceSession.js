@@ -1,14 +1,14 @@
 'use strict';
 
+const config = require('../config');
 const {
   signAccess,
   signRefresh,
-  ttlToMs,
+  ttlToMs, // 🔥 Ahora esto funcionará correctamente
   ACCESS_TTL,
-  REFRESH_TTL_WEB, // Usamos el TTL corto
-  REFRESH_TTL_PWA, // Usamos el TTL largo
-} = require('../../utils/jwt');
-const config = require('../../config');
+  REFRESH_TTL_WEB, 
+  REFRESH_TTL_PWA, 
+} = require('../utils/jwt');
 
 // ===================================================
 // ⚙️ Helpers para Cookies Seguras
@@ -16,9 +16,9 @@ const config = require('../../config');
 function getCookieOptions() {
   const isProd = config.nodeEnv === 'production';
   return {
-    httpOnly: true,
-    secure: isProd, // Sólo HTTPS en producción
-    sameSite: isProd ? 'none' : 'lax',
+    httpOnly: true, // No accesible por JS en el cliente (Seguridad XSS)
+    secure: isProd, // Solo HTTPS en producción
+    sameSite: isProd ? 'none' : 'lax', // 'none' es necesario para cross-site en prod si front/back difieren
     path: '/',
   };
 }
@@ -27,24 +27,32 @@ function getCookieOptions() {
 // 🟢 Crear Sesión (Tokens + Cookies)
 // ===================================================
 exports.create = (res, user, isPWA = false) => {
-  // 1. Definir TTLs basados en el tipo de sesión
+  // 1. Definir TTLs basados en el tipo de sesión (Header del cliente)
   const currentRefreshTTL = isPWA ? REFRESH_TTL_PWA : REFRESH_TTL_WEB;
 
-  // 2. Generar tokens
-  const payload = { id: user.id, email: user.email, name: user.name };
-  const accessToken = signAccess(payload); // Siempre corto (15m)
-  const refreshToken = signRefresh(payload, currentRefreshTTL); // Dinámico (30m o 7d)
+  // 2. Generar payload seguro (maneja .id o ._id)
+  const payload = { 
+    id: user.id || user._id, 
+    email: user.email, 
+    name: user.name 
+  };
+
+  // 3. Generar tokens firmados
+  const accessToken = signAccess(payload); 
+  const refreshToken = signRefresh(payload, currentRefreshTTL); 
   
   const commonOpts = getCookieOptions();
 
-  // 3. Establecer Cookies
+  // 4. Establecer Cookies con maxAge calculado
+  // ttlToMs convierte '15m' -> 900000ms
   res.cookie('at', accessToken, { 
       ...commonOpts, 
-      maxAge: ttlToMs(ACCESS_TTL) // Max 15m
+      maxAge: ttlToMs(ACCESS_TTL) 
   });
+  
   res.cookie('rt', refreshToken, { 
       ...commonOpts, 
-      maxAge: ttlToMs(currentRefreshTTL) // Dinámico (30m o 7d)
+      maxAge: ttlToMs(currentRefreshTTL) 
   });
 };
 
@@ -53,6 +61,8 @@ exports.create = (res, user, isPWA = false) => {
 // ===================================================
 exports.clear = (res) => {
   const opts = getCookieOptions();
+  
+  // Forzamos la expiración inmediata
   res.clearCookie('at', opts);
   res.clearCookie('rt', opts);
 };

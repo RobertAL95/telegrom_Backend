@@ -2,19 +2,23 @@
 
 const express = require('express');
 const router = express.Router();
-const revocationService = require('./sessionRevocation');
 const response = require('../network/response');
 const controller = require('./controller');
 const passport = require('../utils/oauth');
 const auth = require('../middleware');
 const { registerSchema, loginSchema } = require('./validators'); 
-const sessionService = require('./serviceSession'); // 👈 NUEVO!
-const { verify, signAccess, signRefresh } = require('../utils/jwt');
-const revocationService = require('./sessionRevocation');
+const sessionService = require('./serviceSession');
+const revocationService = require('./sessionRevocation'); // ✅ ÚNICA IMPORTACIÓN
+
+// Importamos todas las utilidades de JWT necesarias
+const { verify, decode } = require('../utils/jwt'); 
+// Nota: signAccess y signRefresh se usan en serviceSession, no aquí directamente, 
+// a menos que tengas lógica inline que los requiera. Los eliminé de aquí para limpiar,
+// ya que sessionService.create se encarga de firmar.
 
 // ===================================================
 // ⚙️ Middleware Helper de Validación Joi
-// ... (mantenemos esta función igual) ...
+// ===================================================
 function validate(schema) {
     return (req, res, next) => {
         const { error } = schema.validate(req.body, { abortEarly: false });
@@ -35,7 +39,6 @@ router.post('/register', validate(registerSchema), async (req, res) => {
     response.success(req, res, { user }, 201);
   } catch (err) {
     console.error('❌ Error en /auth/register:', err.message);
-    // Usamos el helper de respuesta estandarizado
     response.error(req, res, err.message, 400); 
   }
 });
@@ -58,23 +61,19 @@ router.post('/login', validate(loginSchema), async (req, res) => {
     response.success(req, res, { user, sessionType: isPWA ? 'PWA' : 'WEB' }, 200);
   } catch (e) {
     console.error('❌ Error en /auth/login:', e.message);
-    // Respuesta estandarizada (401 Unauthorized)
     response.error(req, res, e.message, 401); 
   }
 });
 
 // ===================================================
 // 🟢 Perfil protegido (profile)
-// ... (se mantiene igual, ya usa el middleware 'auth')
 // ===================================================
 router.get('/profile', auth, async (req, res) => {
   try {
-    // req.user ya está poblado por el middleware 'auth'
     const user = { id: req.user.id, name: req.user.name, email: req.user.email }; 
-    // Usamos el helper de respuesta estandarizado
     response.success(req, res, { 
         user, 
-        sessionType: req.sessionType // <-- Usamos la sesión detectada por el middleware
+        sessionType: req.sessionType 
     }, 200);
   } catch (e) {
     console.error('❌ Error en /auth/profile:', e.message);
@@ -83,22 +82,36 @@ router.get('/profile', auth, async (req, res) => {
 });
 
 // ===================================================
-// 🟢 Refresh Token (Con Detección de Dispositivo y Sesión)
+// 🟢 Validar Sesión (/me) - Para el frontend initSession
+// ===================================================
+router.get('/me', async (req, res) => {
+  try {
+    const token = req.cookies?.at;
+    if (!token) return response.error(req, res, 'No session', 401);
+
+    const user = await controller.getUserFromToken(token);
+    response.success(req, res, { user, session: true }, 200);
+  } catch (e) {
+    // Silencioso para logs, normal si no está logueado
+    response.error(req, res, 'Invalid session', 401);
+  }
+});
+
+// ===================================================
+// 🟢 Refresh Token
 // ===================================================
 router.post('/refresh', async (req, res) => {
   try {
     const rt = req.cookies?.rt;
     const decoded = verify(rt);
 
-    // Si el RT es inválido o caducó (ej. los 30 min para Web), falla aquí.
     if (!decoded?.id) return response.error(req, res, 'Refresh token inválido o expirado', 401);
     
-    // Detección de Dispositivo para saber qué TTL usar
     const deviceHeader = req.headers['x-client-device']?.toLowerCase();
     const isPWA = deviceHeader === 'mobile-pwa';
 
-    // Generamos una NUEVA sesión (mantiene el mismo usuario)
-    const user = { id: decoded.id, name: decoded.name, email: decoded.email }; // Asumimos name/email en RT payload
+    // Generamos una NUEVA sesión
+    const user = { id: decoded.id, name: decoded.name, email: decoded.email }; 
     sessionService.create(res, user, isPWA);
 
     response.success(req, res, { refreshed: true, sessionType: isPWA ? 'PWA' : 'WEB' }, 200);
@@ -116,10 +129,10 @@ router.post('/logout', async (req, res) => {
 
   // Si existe RT, lo revocamos inmediatamente
   if (rt) {
-    const decodedPayload = decode(rt); // Obtener JTI sin verificar expiración
+    const decodedPayload = decode(rt); 
     if (decodedPayload?.jti) {
-        // Asumimos que el TTL del RT en el logout es el máximo (PWA) para ser seguros.
-        await revocationService.revokeRefreshToken(decodedPayload.jti, REFRESH_TTL_PWA);
+        // Revocar por 7 días como medida de seguridad máxima
+        await revocationService.revokeRefreshToken(decodedPayload.jti, '7d');
     }
   }
 
@@ -129,7 +142,6 @@ router.post('/logout', async (req, res) => {
 
 // ===================================================
 // 🟢 OAuth Google
-// ... (mantenemos la lógica de OAuth y callback igual, pero usamos sessionService.create)
 // ===================================================
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
@@ -140,9 +152,8 @@ router.get(
     try {
       const { user } = await controller.oauth(req.user);
       
-      // Asumimos que OAuth es principalment PWA/WEB, ajustamos si es necesario.
       const isPWA = req.headers['x-client-device']?.toLowerCase() === 'mobile-pwa';
-      sessionService.create(res, user, isPWA); // Usamos el nuevo servicio
+      sessionService.create(res, user, isPWA); 
       
       res.redirect(`${process.env.FRONTEND_URL || '/'}?login=success`);
     } catch (e) {

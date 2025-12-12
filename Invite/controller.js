@@ -1,41 +1,69 @@
 'use strict';
 
 const service = require('./service');
-const User = require('../globalModels/User');     // modelo global REAL
+const sessionService = require('../Auth/serviceSession'); 
 
-// ===================================================
-// 🟢 Crear invitación (requiere user real existente)
-// ===================================================
-exports.createInvite = async (userId) => {
-  if (!userId) {
-    throw new Error('UserId requerido');
-  }
-
-  // Validar que el usuario existe
-  const exists = await User.findById(userId);
-  if (!exists) {
-    throw new Error('Usuario no encontrado');
-  }
-
-  return service.createInvite(userId);
+// Helper para errores async
+const catchAsync = (fn) => (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
 };
 
 // ===================================================
-// 🟡 Validar token de invitación
+// 🟢 Crear invitación
 // ===================================================
-exports.validateInvite = async (token) => {
-  if (!token) throw new Error('Token requerido');
-  return service.validateInvite(token);
-};
+exports.createInvite = catchAsync(async (req, res) => {
+    // Obtenemos el ID del usuario logueado (host) desde req.user
+    const userId = req.user.id || req.user._id;
+
+    if (!userId) {
+        return res.status(401).json({ error: true, message: 'Usuario no autenticado' });
+    }
+
+    const result = await service.createInvite(userId);
+    res.status(201).json({ error: false, body: result });
+});
 
 // ===================================================
-// 🟢 Aceptar invitación
+// 🟡 Validar token
 // ===================================================
-exports.acceptInvite = async (token, guestName) => {
-  if (!token) throw new Error('Token requerido');
+exports.validateToken = catchAsync(async (req, res) => {
+    // Viene por params: /validate/:token
+    const { token } = req.params;
+    
+    if (!token) return res.status(400).json({ valid: false });
 
-  // nombre por defecto si el front no manda uno
-  const finalName = guestName?.trim() || 'Invitado';
+    const isValid = await service.validateInvite(token);
+    res.status(200).json({ valid: isValid });
+});
 
-  return service.acceptInvite(token, finalName);
-};
+// ===================================================
+// 🟢 Aceptar invitación (EL FIX ESTÁ AQUÍ)
+// ===================================================
+exports.acceptInvite = catchAsync(async (req, res) => {
+    const { token, guestName } = req.body;
+
+    if (!token) {
+        return res.status(400).json({ error: true, message: 'Token requerido' });
+    }
+
+    const finalName = guestName?.trim() || 'Invitado';
+
+    // 1. Llamar al servicio (que devuelve { user, roomId, inviterId })
+    const result = await service.acceptInvite(token, finalName);
+
+    // 2. 🔥 CREAR LA SESIÓN (COOKIE) AUTOMÁTICA
+    // Esto es lo que faltaba. Sin esto, el frontend no tiene credenciales.
+    if (result.user) {
+        await sessionService.create(res, result.user, false);
+    }
+
+    // 3. 🔥 ENVIAR RESPUESTA ESTRUCTURADA
+    // El frontend espera: res.body.user y res.body.roomId
+    res.status(201).json({
+        error: false,
+        body: {
+            user: result.user,
+            roomId: result.roomId
+        }
+    });
+});

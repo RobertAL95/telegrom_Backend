@@ -8,12 +8,12 @@ services:
     build: .
     container_name: flym_backend
     ports:
-      - "5001:4000"  # host:container (frontend apunta a localhost:5001)
+      - "5001:4000"
     environment:
       NODE_ENV: development
       PORT: 4000
       FRONTEND_URL: http://localhost:3000
-
+      
       # 🔐 Seguridad
       JWT_SECRET: super_secret_key_123
       JWT_EXPIRES_IN: 1h
@@ -34,8 +34,18 @@ services:
     networks:
       - flymnet
 
+    # 🔥🔥🔥 EL CAMBIO MAGICO ESTÁ AQUÍ 🔥🔥🔥
+    volumes:
+      # 1. Mapea tu carpeta actual (.) a la carpeta de trabajo del contenedor (/app)
+      - ./:/app
+      # 2. IMPORTANTE: Evita que tu node_modules local (Windows) sobrescriba el del contenedor (Linux)
+      - /app/node_modules
+
     restart: unless-stopped
-    command: node server.js
+    
+    # RECOMENDACIÓN: Si tienes nodemon, usa 'npm run dev'. 
+    # Si no, usa 'node server.js' pero tendrás que reiniciar el contenedor manualmente al cambiar código.
+    command: npm run dev 
 
   # =====================================================
   # 🍃 MongoDB
@@ -65,7 +75,7 @@ services:
     container_name: flym_redis
     restart: unless-stopped
     ports:
-      - "16379:6379"
+      - "6380:6379"
     networks:
       - flymnet
     command: >

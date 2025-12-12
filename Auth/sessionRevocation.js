@@ -1,7 +1,6 @@
-// Auth/service/sessionRevocation.js
 'use strict';
-const redis = require('../../utils/redis');
-const { ttlToMs } = require('../../utils/jwt');
+const redis = require('../utils/redis');
+const { ttlToMs } = require('../utils/jwt');
 
 // Prefijo para las claves de los tokens revocados
 const REVOKED_RT_PREFIX = 'rt:revoked:';
