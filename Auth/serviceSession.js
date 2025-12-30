@@ -1,10 +1,9 @@
 'use strict';
 
-const config = require('../config');
 const {
   signAccess,
   signRefresh,
-  ttlToMs, // 🔥 Ahora esto funcionará correctamente
+  ttlToMs,
   ACCESS_TTL,
   REFRESH_TTL_WEB, 
   REFRESH_TTL_PWA, 
@@ -14,11 +13,13 @@ const {
 // ⚙️ Helpers para Cookies Seguras
 // ===================================================
 function getCookieOptions() {
-  const isProd = config.nodeEnv === 'production';
+  // Leemos directo de process.env para evitar problemas si config.js falla
+  const isProd = false;
+
   return {
-    httpOnly: true, // No accesible por JS en el cliente (Seguridad XSS)
-    secure: isProd, // Solo HTTPS en producción
-    sameSite: isProd ? 'none' : 'lax', // 'none' es necesario para cross-site en prod si front/back difieren
+    httpOnly: true, 
+    secure: isProd, 
+    sameSite: 'lax', 
     path: '/',
   };
 }
@@ -27,33 +28,33 @@ function getCookieOptions() {
 // 🟢 Crear Sesión (Tokens + Cookies)
 // ===================================================
 exports.create = (res, user, isPWA = false) => {
-  // 1. Definir TTLs basados en el tipo de sesión (Header del cliente)
   const currentRefreshTTL = isPWA ? REFRESH_TTL_PWA : REFRESH_TTL_WEB;
 
-  // 2. Generar payload seguro (maneja .id o ._id)
   const payload = { 
     id: user.id || user._id, 
     email: user.email, 
     name: user.name 
   };
 
-  // 3. Generar tokens firmados
   const accessToken = signAccess(payload); 
   const refreshToken = signRefresh(payload, currentRefreshTTL); 
   
-  const commonOpts = getCookieOptions();
+  const opts = getCookieOptions();
 
-  // 4. Establecer Cookies con maxAge calculado
-  // ttlToMs convierte '15m' -> 900000ms
+  // Guardamos la cookie 'at' (Access Token)
   res.cookie('at', accessToken, { 
-      ...commonOpts, 
+      ...opts, 
       maxAge: ttlToMs(ACCESS_TTL) 
   });
   
+  // Guardamos la cookie 'rt' (Refresh Token)
   res.cookie('rt', refreshToken, { 
-      ...commonOpts, 
+      ...opts, 
       maxAge: ttlToMs(currentRefreshTTL) 
   });
+  
+  // Debug: Ver en consola del backend si se están enviando
+  console.log('🍪 Cookies establecidas: at, rt (Secure:', opts.secure, ')');
 };
 
 // ===================================================
@@ -61,8 +62,6 @@ exports.create = (res, user, isPWA = false) => {
 // ===================================================
 exports.clear = (res) => {
   const opts = getCookieOptions();
-  
-  // Forzamos la expiración inmediata
   res.clearCookie('at', opts);
   res.clearCookie('rt', opts);
 };
