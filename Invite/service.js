@@ -1,86 +1,152 @@
 'use strict';
 
-const { signAccess, verify } = require('../utils/jwt');
+const mongoose = require('mongoose'); // ✅ NECESARIO para generar IDs
+const jwt = require('jsonwebtoken'); 
 const User = require('../globalModels/User');
 const UserGuest = require('../globalModels/UserGuest');
 const Conversation = require('../globalModels/Conversation');
 const { publishEvent } = require('../events/publisher');
 
-// ... (createInvite y validateInvite se quedan igual) ...
+// ===================================================
+// 🟢 1. Crear Invitación
+// ===================================================
+exports.createInvite = async (body, userId) => {
+    const { chatId } = body;
+
+    const payload = {
+        inviter: userId,
+        type: chatId ? 'group_invite' : 'direct_invite',
+        chatId: chatId || null,
+        iat: Date.now()
+    };
+
+    const secret = process.env.JWT_SECRET || 'secret'; 
+    const token = jwt.sign(payload, secret, { expiresIn: '24h' });
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const link = `${frontendUrl}/invite/${token}`;
+
+    return { link, token, mode: payload.type };
+};
 
 // ===================================================
-// 🟢 Aceptar invitación (LÓGICA BLINDADA)
+// 🟢 2. Validar Invitación
+// ===================================================
+exports.validateInvite = async (token) => {
+    try {
+        const secret = process.env.JWT_SECRET || 'secret';
+        const decoded = jwt.verify(token, secret);
+
+        const inviter = await User.findById(decoded.inviter).select('name avatar');
+        
+        let chatName = 'Chat Directo';
+        if (decoded.chatId) {
+             const convo = await Conversation.findById(decoded.chatId);
+             if (convo) chatName = convo.name;
+        }
+
+        return {
+            valid: true,
+            type: decoded.type,
+            inviterName: inviter ? inviter.name : 'Usuario',
+            inviterAvatar: inviter ? inviter.avatar : null,
+            chatName: chatName
+        };
+
+    } catch (error) {
+        return { valid: false, message: 'Invitación expirada o inválida' };
+    }
+};
+
+// ===================================================
+// 🟢 3. Aceptar Invitación (FIX VALIDACIÓN CHATID)
 // ===================================================
 exports.acceptInvite = async (token, guestName) => {
   try {
-    const realToken = decodeURIComponent(token);
-    const decoded = verify(realToken);
-    const { inviter, chatId } = decoded;
+    const secret = process.env.JWT_SECRET || 'secret';
+    const decoded = jwt.verify(token, secret);
+    const { inviter, type, chatId } = decoded;
 
-    if (!inviter || !chatId) throw new Error('Token inválido');
+    if (!inviter) throw new Error('Token inválido');
 
-    // 1) Asegurar que la conversación existe
-    const convo = await Conversation.findById(chatId);
-    if (!convo) throw new Error('El chat no existe o fue eliminado');
+    // ----------------------------------------------------
+    // 🔧 FIX CRÍTICO: PRE-CALCULAR EL CHAT ID
+    // ----------------------------------------------------
+    // El modelo UserGuest exige un chatId obligatorio.
+    // Si es grupo, usamos el que viene. Si es personal, generamos uno nuevo YA.
+    let targetChatId = chatId;
+    if (!targetChatId) {
+        targetChatId = new mongoose.Types.ObjectId(); // Generamos ID virgen
+    }
 
-    // 2) Crear usuario invitado (Vinculación fuerte al chatId)
+    // 1) Crear el Usuario Invitado (Ahora sí lleva chatId)
     const guest = await UserGuest.create({
       name: guestName,
       email: `guest_${Date.now()}_${Math.floor(Math.random() * 1000)}@flym.temp`,
       inviterId: inviter, 
-      chatId: chatId,    
-      isGuest: true
+      isGuest: true,
+      chatId: targetChatId // ✅ Satisfacemos la validación "required"
     });
 
-    // 3) Añadir invitado al chat (Evitando duplicados)
-    // Convertimos a string para comparar, ya que son ObjectIds
-    const isAlreadyIn = convo.participants.some(p => p.toString() === guest._id.toString());
-    
-    if (!isAlreadyIn) {
-        convo.participants.push(guest._id);
-        convo.participantsModel.push('UserGuest'); 
+    let targetChat;
+
+    // 2A) ESCENARIO GRUPO (Chat ya existe)
+    if (type === 'group_invite' && chatId) {
+        targetChat = await Conversation.findById(chatId);
+        if (!targetChat) throw new Error('Chat no existe');
         
-        // Mensaje de sistema (Opcional pero recomendado para consistencia)
-        convo.messages.push({
-            sender: guest._id,
-            senderModel: 'UserGuest',
-            text: '👋 Se ha unido al chat'
+        const isIn = targetChat.participants.some(p => p.toString() === guest._id.toString());
+        if (!isIn) {
+            targetChat.participants.push(guest._id);
+            targetChat.participantsModel.push('UserGuest');
+            await targetChat.save();
+        }
+    } 
+    // 2B) ESCENARIO DIRECTO (Crear Chat con el ID Pre-generado)
+    else {
+        targetChat = await Conversation.create({
+            _id: targetChatId, // ✅ Usamos el mismo ID que le dimos al Guest
+            participants: [inviter, guest._id],
+            participantsModel: ['User', 'UserGuest'],
+            isGroup: false,
+            messages: [{
+                sender: guest._id,
+                senderModel: 'UserGuest',
+                text: '👋 Hola, he aceptado tu invitación.',
+                timestamp: Date.now()
+            }]
         });
-        
-        await convo.save();
     }
 
-    // 4) 🔍 OBTENER DATOS REALES PARA EL FRONTEND
-    // Necesitamos saber cómo se llama el Host para mostrárselo al Invitado
-    // Como el Host siempre es el creador (index 0 generalmente), o lo buscamos por ID:
+    // 3) Respuesta al Frontend
     const hostUser = await User.findById(inviter).select('name avatar');
 
-    // Construimos el objeto de chat "inicial" para el invitado
     const chatForGuest = {
-        id: convo._id.toString(),
-        name: hostUser ? hostUser.name : "Chat de Invitación", // ✅ El nombre real del Host
+        id: targetChat._id.toString(),
+        name: hostUser ? hostUser.name : "Anfitrión", 
         avatar: hostUser ? hostUser.avatar : null,
-        lastMessage: '👋 Se ha unido al chat',
+        lastMessage: '👋 Hola, he aceptado tu invitación.',
         timestamp: Date.now(),
         isGuestChat: true
     };
 
-    // Evento para Analytics (o WebSockets en Paso 3)
+    // 4) Notificación WS
     if (publishEvent) {
       await publishEvent('InviteAccepted', {
-        chatId,
-        inviter,
+        chatId: targetChat._id.toString(),
+        inviterId: inviter,
         guestId: guest._id.toString(),
         guestName,
-        fullChat: chatForGuest // Enviamos esto para que el socket lo use luego
+        fullChat: chatForGuest 
       });
     }
 
     return {
       user: guest,
-      chat: chatForGuest, // ✅ Devolvemos el Chat Completo
+      chat: chatForGuest,
       inviterId: inviter,
     };
+
   } catch (e) {
     console.error('❌ Error en acceptInvite:', e);
     throw e; 

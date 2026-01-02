@@ -10,22 +10,23 @@ const {
 } = require('../utils/jwt');
 
 // ===================================================
-// ⚙️ Helpers para Cookies Seguras
+// ⚙️ Helpers para Cookies (FORZADO PARA LOCALHOST)
 // ===================================================
 function getCookieOptions() {
-  // Leemos directo de process.env para evitar problemas si config.js falla
-  const isProd = false;
+  // 👇 MIENTRAS ESTÉS EN LOCALHOST, ESTO DEBE SER FALSE
+  // Si Docker tiene NODE_ENV=production, esto te rompía todo.
+  const isProd = false; 
 
   return {
     httpOnly: true, 
-    secure: isProd, 
-    sameSite: 'lax', 
+    secure: isProd, // false -> Permite HTTP
+    sameSite: 'lax', // lax -> Permite navegación local correcta
     path: '/',
   };
 }
 
 // ===================================================
-// 🟢 Crear Sesión (Tokens + Cookies)
+// 🟢 Crear Sesión
 // ===================================================
 exports.create = (res, user, isPWA = false) => {
   const currentRefreshTTL = isPWA ? REFRESH_TTL_PWA : REFRESH_TTL_WEB;
@@ -41,25 +42,19 @@ exports.create = (res, user, isPWA = false) => {
   
   const opts = getCookieOptions();
 
-  // Guardamos la cookie 'at' (Access Token)
-  res.cookie('at', accessToken, { 
-      ...opts, 
-      maxAge: ttlToMs(ACCESS_TTL) 
-  });
+  // Guardamos cookies
+  res.cookie('at', accessToken, { ...opts, maxAge: ttlToMs(ACCESS_TTL) });
+  res.cookie('rt', refreshToken, { ...opts, maxAge: ttlToMs(currentRefreshTTL) });
   
-  // Guardamos la cookie 'rt' (Refresh Token)
-  res.cookie('rt', refreshToken, { 
-      ...opts, 
-      maxAge: ttlToMs(currentRefreshTTL) 
+  // Debug explícito
+  console.log('🍪 SET-COOKIE:', { 
+      secure: opts.secure, 
+      sameSite: opts.sameSite, 
+      user: user.email 
   });
-  
-  // Debug: Ver en consola del backend si se están enviando
-  console.log('🍪 Cookies establecidas: at, rt (Secure:', opts.secure, ')');
 };
 
-// ===================================================
-// 🟢 Borrar Sesión (Limpiar Cookies)
-// ===================================================
+// ... (El resto del archivo exports.clear sigue igual)
 exports.clear = (res) => {
   const opts = getCookieOptions();
   res.clearCookie('at', opts);

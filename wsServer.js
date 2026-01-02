@@ -13,9 +13,8 @@ const chatService = require('./Chat/service');
 const pubClient = redis.createClient();
 const subClient = redis.createClient();
 const CHAT_CHANNEL = 'CHAT_GLOBAL_CHANNEL';
-const SYSTEM_CHANNEL = 'system_events'; // ✅ Escuchamos eventos del publisher
+const SYSTEM_CHANNEL = 'system_events'; 
 
-// Suscribirse a ambos canales
 subClient.subscribe(CHAT_CHANNEL);
 subClient.subscribe(SYSTEM_CHANNEL); 
 
@@ -23,22 +22,19 @@ subClient.subscribe(SYSTEM_CHANNEL);
 // 🧠 Estado local
 // ===============================================
 const rooms = new Map(); // Map<roomId, Set<ws>>
-const userSockets = new Map(); // ✅ Map<userId, Set<ws>> (Nuevo: Para notificaciones directas)
+const userSockets = new Map(); // Map<userId, Set<ws>>
 
 // ===============================================
-// 👂 Escucha de Redis (El Puente)
+// 👂 Escucha de Redis
 // ===============================================
 subClient.on('message', (channel, message) => {
   try {
     const parsed = JSON.parse(message);
 
-    // A) Mensajes de Chat Normales
     if (channel === CHAT_CHANNEL) {
       const { roomId, data } = parsed;
       broadcastToRoom(roomId, data);
     } 
-    
-    // B) Eventos de Sistema (EJ: INVITACIÓN ACEPTADA)
     else if (channel === SYSTEM_CHANNEL) {
       handleSystemEvent(parsed);
     }
@@ -48,7 +44,6 @@ subClient.on('message', (channel, message) => {
   }
 });
 
-// Lógica para manejar eventos del sistema (InviteAccepted)
 function handleSystemEvent(event) {
   const { eventType, payload } = event;
 
@@ -56,10 +51,10 @@ function handleSystemEvent(event) {
     const { inviter, fullChat } = payload;
     console.log(`📨 Notificando al Host (${inviter}) sobre nuevo chat...`);
     
-    // Enviamos el chat completo SOLO al usuario que invitó (Host)
+    // 🔥 IMPORTANTE: Aquí notificamos al Host para que actualice su lista
     sendToUser(inviter, {
-        type: 'NEW_CHAT_CREATED',
-        chat: fullChat
+        type: 'InviteAccepted', // Debe coincidir con lo que espera el Frontend
+        fullChat: fullChat
     });
   }
 }
@@ -76,21 +71,19 @@ function initWSS(server) {
       const urlObj = new URL(req.url, `http://${req.headers.host}`);
       const params = urlObj.searchParams;
       let token = params.get('token'); 
-      const roomId = params.get('roomId'); // Ahora es OPCIONAL
+      // El roomId en URL es opcional (para conexión directa)
+      let initialRoomId = params.get('roomId'); 
 
-      // Cookie Fallback
       if (!token && req.headers.cookie) {
         const cookies = cookie.parse(req.headers.cookie);
         token = cookies.at; 
       }
 
-      // 2. Validación (Solo Token es obligatorio ahora)
       if (!token) { 
         ws.close(4000, 'Missing token'); 
         return; 
       }
 
-      // 3. Verificación JWT
       let decoded;
       try { 
         decoded = verify(token); 
@@ -102,68 +95,103 @@ function initWSS(server) {
       const userId = decoded.id;
       const userName = decoded.name || 'Usuario';
 
-      // 4. Registrar en Mapa de Usuarios (Global)
-      // Esto permite enviarle mensajes esté en la sala que esté
+      // 2. Registrar Usuario Globalmente (Para notificaciones de lobby)
       if (!userSockets.has(userId)) userSockets.set(userId, new Set());
       userSockets.get(userId).add(ws);
 
       ws.userId = userId;
       ws.userName = userName;
+      ws.roomId = null; // Empezamos en null
 
-      // 5. Lógica de Sala (Solo si envió roomId)
-      if (roomId) {
-         // ACL Check
-         const conversation = await Conversation.findById(roomId, 'participants');
-         const isParticipant = conversation?.participants.some(p => p.toString() === userId.toString());
+      // 3. Helper interno para unirse a una sala
+      const joinRoomHandler = async (roomIdToJoin) => {
+          // ACL Check: ¿Es participante?
+          const conversation = await Conversation.findById(roomIdToJoin, 'participants');
+          const isParticipant = conversation?.participants.some(p => p.toString() === userId.toString());
 
-         if (!isParticipant) {
-             ws.close(4003, 'Forbidden'); 
-             return; 
-         }
+          if (!isParticipant) {
+             console.warn(`⛔ Acceso denegado a ${userName} para sala ${roomIdToJoin}`);
+             return false;
+          }
 
-         if (!rooms.has(roomId)) rooms.set(roomId, new Set());
-         rooms.get(roomId).add(ws);
-         ws.roomId = roomId;
+          // Salir de sala anterior si estaba en una
+          if (ws.roomId && rooms.has(ws.roomId)) {
+              rooms.get(ws.roomId).delete(ws);
+          }
 
-         console.log(`🟢 WS: ${userName} -> Sala ${roomId}`);
-         publishToRoom(roomId, { system: true, type: 'user_joined', userName });
+          if (!rooms.has(roomIdToJoin)) rooms.set(roomIdToJoin, new Set());
+          rooms.get(roomIdToJoin).add(ws);
+          ws.roomId = roomIdToJoin;
+
+          console.log(`🟢 WS: ${userName} -> Se unió a Sala ${roomIdToJoin}`);
+          return true;
+      };
+
+      // 4. Si vino con roomId en la URL, intentamos unirnos
+      if (initialRoomId) {
+         await joinRoomHandler(initialRoomId);
       } else {
-         console.log(`🔵 WS: ${userName} -> Conectado al Lobby (Notificaciones)`);
+         console.log(`🔵 WS: ${userName} -> Conectado al Lobby`);
       }
 
-      // 6. Manejo de Mensajes (Solo si está en una sala)
+      // 5. MANEJO DE MENSAJES (¡AQUÍ ESTABA EL PROBLEMA!)
       ws.on('message', async (raw) => {
-        if (!ws.roomId) return; // Si está en lobby, no puede enviar mensajes de chat
-        // ... (Tu lógica existente de mensajes) ...
-        // (Mantenla igual que antes, omitida aquí por brevedad pero NO la borres)
         try {
-             // ... tu logica de Joi y chatService ...
-             const data = JSON.parse(raw);
-             const savedMessage = await chatService.sendMessage(ws.roomId, userId, data.text);
-             publishToRoom(ws.roomId, { 
-                type: 'message', 
-                payload: {
-                    from: userId, 
-                    text: savedMessage.text, 
-                    timestamp: savedMessage.timestamp,
-                    name: userName
-                } 
-             });
-        } catch(e) { console.error(e); }
+            const data = JSON.parse(raw);
+
+            // CASO A: Unirse a sala dinámicamente (Frontend envía esto ahora)
+            if (data.type === 'join_chat' && data.chatId) {
+                await joinRoomHandler(data.chatId);
+                return;
+            }
+
+            // CASO B: Salir de sala
+            if (data.type === 'leave_chat') {
+                if (ws.roomId && rooms.has(ws.roomId)) {
+                    rooms.get(ws.roomId).delete(ws);
+                    console.log(`👋 WS: ${userName} salió de sala ${ws.roomId}`);
+                }
+                ws.roomId = null;
+                return;
+            }
+
+            // CASO C: Mensaje de Chat Real
+            // Solo procesamos si ya tiene sala asignada
+            if (!ws.roomId) return; 
+
+            if (data.type === 'message' || data.text) {
+                const textToSend = data.text || data.payload?.text;
+                if (!textToSend) return;
+
+                const savedMessage = await chatService.sendMessage(ws.roomId, userId, textToSend);
+                
+                // Publicar a Redis para que llegue a todos (incluyendo este nodo)
+                publishToRoom(ws.roomId, { 
+                    type: 'message', 
+                    payload: {
+                        from: userId, 
+                        text: savedMessage.text, 
+                        timestamp: savedMessage.timestamp,
+                        name: userName
+                    } 
+                });
+            }
+
+        } catch (e) {
+            console.error('Error handling WS message:', e);
+        }
       });
 
-      // 7. Desconexión
+      // 6. Desconexión
       ws.on('close', () => {
-        // Remover de Sala
-        if (ws.roomId) {
+        if (ws.roomId && rooms.has(ws.roomId)) {
           const roomSockets = rooms.get(ws.roomId);
           if (roomSockets) {
             roomSockets.delete(ws);
             if (roomSockets.size === 0) rooms.delete(ws.roomId);
           }
         }
-        // Remover de Mapa Global
-        if (ws.userId) {
+        if (ws.userId && userSockets.has(ws.userId)) {
             const uSockets = userSockets.get(ws.userId);
             if (uSockets) {
                 uSockets.delete(ws);
@@ -173,7 +201,7 @@ function initWSS(server) {
       });
 
     } catch (err) {
-      console.error('❌ Error WS:', err);
+      console.error('❌ Error WS Connection:', err);
       ws.close(4002, 'Internal error');
     }
   });
@@ -194,10 +222,12 @@ function broadcastToRoom(roomId, data) {
   }
 }
 
-// Helper: Enviar a Usuario Específico (Local)
+// Helper: Enviar a Usuario Específico
 function sendToUser(userId, data) {
+    // Buscamos todas las conexiones de ese usuario (puede tener varias pestañas)
     const sockets = userSockets.get(userId);
     if (!sockets) return;
+    
     const msg = JSON.stringify(data);
     for (const client of sockets) {
         if (client.readyState === WebSocket.OPEN) client.send(msg);
