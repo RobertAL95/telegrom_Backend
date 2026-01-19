@@ -3,6 +3,19 @@
 const service = require('./service');
 const jwtUtils = require('../utils/jwt');
 
+// Función auxiliar para estandarizar la respuesta del usuario
+// Esto evita repetir código y asegura que siempre mandamos el friendId
+function formatUserResponse(user) {
+    return {
+        id: user._id,
+        friendId: user.friendId, // ✨ AQUÍ ESTÁ LA MAGIA
+        name: user.name,
+        email: user.email,
+        avatar: user.avatar,
+        status: user.status
+    };
+}
+
 // ===================================================
 // 🟢 Registro
 // ===================================================
@@ -10,12 +23,8 @@ exports.register = async (body) => {
   // Nota: service.register ya recibe datos validados por Joi en network
   const savedUser = await service.register(body);
 
-  // Devolvemos DTO limpio (sin password, ni __v)
-  return {
-    id: savedUser._id,
-    name: savedUser.name,
-    email: savedUser.email,
-  };
+  // Devolvemos usuario formateado
+  return formatUserResponse(savedUser);
 };
 
 // ===================================================
@@ -26,11 +35,7 @@ exports.login = async ({ email, password }) => {
   
   // Estandarizamos retorno para que network siempre reciba { user: ... }
   return { 
-    user: { 
-      id: user._id, 
-      name: user.name, 
-      email: user.email 
-    } 
+    user: formatUserResponse(user)
   };
 };
 
@@ -40,13 +45,8 @@ exports.login = async ({ email, password }) => {
 exports.oauth = async (profile) => {
   const user = await service.oauth(profile);
   
-  // Corrección: Devolvemos 'user' explícitamente, no 'token'
   return { 
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email
-    }
+    user: formatUserResponse(user)
   };
 };
 
@@ -60,5 +60,5 @@ exports.getUserFromToken = async (token) => {
   const user = await service.findById(decoded.id);
   if (!user) throw new Error('Usuario no encontrado');
 
-  return { id: user._id, name: user.name, email: user.email };
+  return formatUserResponse(user);
 };

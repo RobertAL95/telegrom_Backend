@@ -1,15 +1,17 @@
 'use strict';
 const WebSocket = require('ws');
-const Joi = require('joi'); 
 const { verify } = require('./utils/jwt');
 const Conversation = require('./globalModels/Conversation'); 
+const User = require('./globalModels/User');
+const UserGuest = require('./globalModels/UserGuest');
 const cookie = require('cookie'); 
 const redis = require('./utils/redis'); 
 const chatService = require('./Chat/service'); 
 
 // ===============================================
-// 🔴 Redis: Pub/Sub Unificado
+// 🔴 Redis: Pub/Sub
 // ===============================================
+// Creamos clientes dedicados para Pub/Sub
 const pubClient = redis.createClient();
 const subClient = redis.createClient();
 const CHAT_CHANNEL = 'CHAT_GLOBAL_CHANNEL';
@@ -25,7 +27,7 @@ const rooms = new Map(); // Map<roomId, Set<ws>>
 const userSockets = new Map(); // Map<userId, Set<ws>>
 
 // ===============================================
-// 👂 Escucha de Redis
+// 👂 Escucha de Redis (Inter-process communication)
 // ===============================================
 subClient.on('message', (channel, message) => {
   try {
@@ -48,12 +50,11 @@ function handleSystemEvent(event) {
   const { eventType, payload } = event;
 
   if (eventType === 'InviteAccepted') {
-    const { inviter, fullChat } = payload;
-    console.log(`📨 Notificando al Host (${inviter}) sobre nuevo chat...`);
+    const { inviterId, fullChat } = payload; 
+    console.log(`📨 Sistema: Invitación aceptada. Notificando a Host ${inviterId}`);
     
-    // 🔥 IMPORTANTE: Aquí notificamos al Host para que actualice su lista
-    sendToUser(inviter, {
-        type: 'InviteAccepted', // Debe coincidir con lo que espera el Frontend
+    sendToUser(inviterId, {
+        type: 'InviteAccepted', 
         fullChat: fullChat
     });
   }
@@ -67,11 +68,10 @@ function initWSS(server) {
 
   wss.on('connection', async (ws, req) => {
     try {
-      // 1. Extracción de Credenciales
+      // 1. Autenticación (Query param o Cookie)
       const urlObj = new URL(req.url, `http://${req.headers.host}`);
       const params = urlObj.searchParams;
       let token = params.get('token'); 
-      // El roomId en URL es opcional (para conexión directa)
       let initialRoomId = params.get('roomId'); 
 
       if (!token && req.headers.cookie) {
@@ -94,85 +94,111 @@ function initWSS(server) {
 
       const userId = decoded.id;
       const userName = decoded.name || 'Usuario';
-
-      // 2. Registrar Usuario Globalmente (Para notificaciones de lobby)
+      // Importante: Intentamos determinar si es Guest por el token (si tienes ese flag)
+      // Si no, asumimos que el ID es único globalmente (MongoDB ObjectID).
+      
+      // 2. Registrar Usuario
       if (!userSockets.has(userId)) userSockets.set(userId, new Set());
       userSockets.get(userId).add(ws);
 
       ws.userId = userId;
       ws.userName = userName;
-      ws.roomId = null; // Empezamos en null
+      ws.roomId = null; 
+      ws.isAlive = true; // Para Heartbeat
 
-      // 3. Helper interno para unirse a una sala
+      // 3. Heartbeat (Ping/Pong) para evitar desconexiones fantasma
+      ws.on('pong', () => { ws.isAlive = true; });
+
+      // 4. Helper: Unirse a sala con validación
       const joinRoomHandler = async (roomIdToJoin) => {
-          // ACL Check: ¿Es participante?
-          const conversation = await Conversation.findById(roomIdToJoin, 'participants');
-          const isParticipant = conversation?.participants.some(p => p.toString() === userId.toString());
+          try {
+            // Buscamos la conversación y sus participantes
+            // .lean() es más rápido si solo leemos
+            const conversation = await Conversation.findById(roomIdToJoin, 'participants').lean();
+            
+            if (!conversation) {
+                console.warn(`⚠️ Sala no encontrada: ${roomIdToJoin}`);
+                return false;
+            }
 
-          if (!isParticipant) {
-             console.warn(`⛔ Acceso denegado a ${userName} para sala ${roomIdToJoin}`);
-             return false;
+            // Verificamos si el usuario está en la lista de participantes
+            // Convertimos a string para asegurar comparación correcta
+            const isParticipant = conversation.participants.some(p => p.toString() === userId.toString());
+
+            if (!isParticipant) {
+                console.warn(`⛔ Acceso denegado: ${userName} (${userId}) a sala ${roomIdToJoin}`);
+                // Opcional: Enviar error al cliente
+                ws.send(JSON.stringify({ type: 'error', message: 'No tienes acceso a este chat' }));
+                return false;
+            }
+
+            // Salir de sala anterior si existe
+            if (ws.roomId && rooms.has(ws.roomId)) {
+                rooms.get(ws.roomId).delete(ws);
+                if (rooms.get(ws.roomId).size === 0) rooms.delete(ws.roomId);
+            }
+
+            // Entrar a nueva sala
+            if (!rooms.has(roomIdToJoin)) rooms.set(roomIdToJoin, new Set());
+            rooms.get(roomIdToJoin).add(ws);
+            ws.roomId = roomIdToJoin;
+
+            console.log(`🟢 WS: ${userName} se unió a ${roomIdToJoin}`);
+            
+            // Confirmación al cliente
+            ws.send(JSON.stringify({ type: 'room_joined', roomId: roomIdToJoin }));
+            return true;
+
+          } catch (err) {
+              console.error("Error en joinRoomHandler:", err);
+              return false;
           }
-
-          // Salir de sala anterior si estaba en una
-          if (ws.roomId && rooms.has(ws.roomId)) {
-              rooms.get(ws.roomId).delete(ws);
-          }
-
-          if (!rooms.has(roomIdToJoin)) rooms.set(roomIdToJoin, new Set());
-          rooms.get(roomIdToJoin).add(ws);
-          ws.roomId = roomIdToJoin;
-
-          console.log(`🟢 WS: ${userName} -> Se unió a Sala ${roomIdToJoin}`);
-          return true;
       };
 
-      // 4. Si vino con roomId en la URL, intentamos unirnos
+      // 5. Auto-join inicial (si viene en URL)
       if (initialRoomId) {
          await joinRoomHandler(initialRoomId);
-      } else {
-         console.log(`🔵 WS: ${userName} -> Conectado al Lobby`);
       }
 
-      // 5. MANEJO DE MENSAJES (¡AQUÍ ESTABA EL PROBLEMA!)
+      // 6. Manejo de Mensajes Entrantes
       ws.on('message', async (raw) => {
         try {
             const data = JSON.parse(raw);
 
-            // CASO A: Unirse a sala dinámicamente (Frontend envía esto ahora)
+            // A. Petición de unión explícita (desde el frontend useChatWS)
             if (data.type === 'join_chat' && data.chatId) {
                 await joinRoomHandler(data.chatId);
                 return;
             }
 
-            // CASO B: Salir de sala
+            // B. Salir de sala
             if (data.type === 'leave_chat') {
                 if (ws.roomId && rooms.has(ws.roomId)) {
                     rooms.get(ws.roomId).delete(ws);
-                    console.log(`👋 WS: ${userName} salió de sala ${ws.roomId}`);
                 }
                 ws.roomId = null;
                 return;
             }
 
-            // CASO C: Mensaje de Chat Real
-            // Solo procesamos si ya tiene sala asignada
-            if (!ws.roomId) return; 
-
-            if (data.type === 'message' || data.text) {
+            // C. Mensaje de Chat
+            if ((data.type === 'message' || data.text) && ws.roomId) {
                 const textToSend = data.text || data.payload?.text;
-                if (!textToSend) return;
+                if (!textToSend || !textToSend.trim()) return;
 
+                // Guardar en BD
+                // Nota: Service maneja la lógica de User vs Guest internamente
                 const savedMessage = await chatService.sendMessage(ws.roomId, userId, textToSend);
                 
-                // Publicar a Redis para que llegue a todos (incluyendo este nodo)
+                // Publicar a Redis para distribución global
                 publishToRoom(ws.roomId, { 
                     type: 'message', 
                     payload: {
                         from: userId, 
                         text: savedMessage.text, 
                         timestamp: savedMessage.timestamp,
-                        name: userName
+                        name: userName,
+                        // Añadimos senderModel por si el frontend lo necesita
+                        senderModel: savedMessage.senderModel 
                     } 
                 });
             }
@@ -182,7 +208,7 @@ function initWSS(server) {
         }
       });
 
-      // 6. Desconexión
+      // 7. Desconexión
       ws.on('close', () => {
         if (ws.roomId && rooms.has(ws.roomId)) {
           const roomSockets = rooms.get(ws.roomId);
@@ -201,18 +227,31 @@ function initWSS(server) {
       });
 
     } catch (err) {
-      console.error('❌ Error WS Connection:', err);
-      ws.close(4002, 'Internal error');
+      console.error('❌ Error crítico en conexión WS:', err);
+      ws.close(4002, 'Internal Error');
     }
   });
+
+  // Intervalo de limpieza de conexiones muertas
+  const interval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      if (ws.isAlive === false) return ws.terminate();
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, 30000);
+
+  wss.on('close', () => clearInterval(interval));
 }
 
-// Helper: Enviar a Sala (Vía Redis)
+// ===============================================
+// Helpers
+// ===============================================
+
 function publishToRoom(roomId, data) {
   pubClient.publish(CHAT_CHANNEL, JSON.stringify({ roomId, data }));
 }
 
-// Helper: Difundir a Sala Local
 function broadcastToRoom(roomId, data) {
   const roomSockets = rooms.get(roomId);
   if (!roomSockets) return;
@@ -222,9 +261,7 @@ function broadcastToRoom(roomId, data) {
   }
 }
 
-// Helper: Enviar a Usuario Específico
 function sendToUser(userId, data) {
-    // Buscamos todas las conexiones de ese usuario (puede tener varias pestañas)
     const sockets = userSockets.get(userId);
     if (!sockets) return;
     
@@ -234,4 +271,11 @@ function sendToUser(userId, data) {
     }
 }
 
-module.exports = { initWSS };
+// Función para cerrar conexiones Redis al apagar el servidor
+async function closeRedis() {
+    console.log("🔌 Cerrando conexiones Pub/Sub de WS...");
+    await pubClient.quit();
+    await subClient.quit();
+}
+
+module.exports = { initWSS, closeRedis };

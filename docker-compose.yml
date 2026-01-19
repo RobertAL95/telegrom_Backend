@@ -47,6 +47,13 @@ services:
     # Si no, usa 'node server.js' pero tendrás que reiniciar el contenedor manualmente al cambiar código.
     command: npm run dev 
 
+    # 🛡️ LÍMITES DE RECURSOS (BACKEND)
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'     # Máximo 50% de un núcleo
+          memory: 1G       # Máximo 1GB de RAM (Suficiente para dev)
+
   # =====================================================
   # 🍃 MongoDB
   # =====================================================
@@ -66,6 +73,13 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+    
+    # 🛡️ LÍMITES DE RECURSOS (MONGO)
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 1G       # Mongo necesita algo de caché, 1GB está bien para dev
 
   # =====================================================
   # 🔴 Redis
@@ -86,6 +100,13 @@ services:
       timeout: 5s
       retries: 5
 
+    # 🛡️ LÍMITES DE RECURSOS (REDIS)
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'     # Redis es muy ligero
+          memory: 128M     # Con 128MB le sobra para chat
+
   # =====================================================
   # 🧭 Mongo Express (GUI web)
   # =====================================================
@@ -105,6 +126,13 @@ services:
         condition: service_healthy
     networks:
       - flymnet
+    
+    # 🛡️ LÍMITES DE RECURSOS (GUI)
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 200M     # UI ligera
 
 # =====================================================
 # Volúmenes persistentes

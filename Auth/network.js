@@ -8,13 +8,10 @@ const passport = require('../utils/oauth');
 const auth = require('../middleware');
 const { registerSchema, loginSchema } = require('./validators'); 
 const sessionService = require('./serviceSession');
-const revocationService = require('./sessionRevocation'); // ✅ ÚNICA IMPORTACIÓN
+const revocationService = require('./sessionRevocation'); 
 
 // Importamos todas las utilidades de JWT necesarias
 const { verify, decode } = require('../utils/jwt'); 
-// Nota: signAccess y signRefresh se usan en serviceSession, no aquí directamente, 
-// a menos que tengas lógica inline que los requiera. Los eliminé de aquí para limpiar,
-// ya que sessionService.create se encarga de firmar.
 
 // ===================================================
 // ⚙️ Middleware Helper de Validación Joi
@@ -35,7 +32,10 @@ function validate(schema) {
 // ===================================================
 router.post('/register', validate(registerSchema), async (req, res) => {
   try {
+    // El controller ahora devuelve directamente el objeto { id, friendId, ... }
     const user = await controller.register(req.body);
+    
+    // Devolvemos { user } dentro del body de respuesta
     response.success(req, res, { user }, 201);
   } catch (err) {
     console.error('❌ Error en /auth/register:', err.message);
@@ -70,7 +70,17 @@ router.post('/login', validate(loginSchema), async (req, res) => {
 // ===================================================
 router.get('/profile', auth, async (req, res) => {
   try {
-    const user = { id: req.user.id, name: req.user.name, email: req.user.email }; 
+    // Aquí usamos req.user que viene del middleware 'auth'
+    // Aseguramos de pasar friendId si el middleware lo inyectó (depende de tu JWT payload)
+    // Si no está en el token, podrías necesitar hacer una consulta a BD, pero por eficiencia
+    // asumimos que lo básico está aquí.
+    const user = { 
+        id: req.user.id, 
+        friendId: req.user.friendId, // Idealmente esto debería estar en el payload del token
+        name: req.user.name, 
+        email: req.user.email 
+    }; 
+    
     response.success(req, res, { 
         user, 
         sessionType: req.sessionType 
@@ -92,7 +102,6 @@ router.get('/me', async (req, res) => {
     const user = await controller.getUserFromToken(token);
     response.success(req, res, { user, session: true }, 200);
   } catch (e) {
-    // Silencioso para logs, normal si no está logueado
     response.error(req, res, 'Invalid session', 401);
   }
 });
@@ -111,6 +120,8 @@ router.post('/refresh', async (req, res) => {
     const isPWA = deviceHeader === 'mobile-pwa';
 
     // Generamos una NUEVA sesión
+    // Nota: Aquí deberías volver a buscar el usuario en BD si quieres actualizar el friendId 
+    // en el nuevo token, pero por ahora mantenemos lo básico del token anterior.
     const user = { id: decoded.id, name: decoded.name, email: decoded.email }; 
     sessionService.create(res, user, isPWA);
 
@@ -127,11 +138,9 @@ router.post('/refresh', async (req, res) => {
 router.post('/logout', async (req, res) => {
   const rt = req.cookies?.rt;
 
-  // Si existe RT, lo revocamos inmediatamente
   if (rt) {
     const decodedPayload = decode(rt); 
     if (decodedPayload?.jti) {
-        // Revocar por 7 días como medida de seguridad máxima
         await revocationService.revokeRefreshToken(decodedPayload.jti, '7d');
     }
   }

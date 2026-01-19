@@ -4,23 +4,37 @@ const UserSchema = new mongoose.Schema({
   name: { 
       type: String, 
       required: true,
-      trim: true // 👈 Elimina espacios al inicio/final
+      trim: true 
   },
   email: { 
       type: String, 
       required: true, 
       unique: true,
-      trim: true, // 👈 Elimina espacios
-      lowercase: true // 👈 Fuerza minúsculas siempre
+      trim: true, 
+      lowercase: true 
   },
+  password: { 
+      type: String, 
+      required: false // Asumo false para soportar OAuth en el futuro
+  }, 
+
+  // ✨ EL NUEVO CAMPO ID CORTO
+  friendId: {
+        type: String,
+        unique: true,
+        required: true, // ¡OJO! Esto obliga a que el Service lo genere
+    },
   
-  password: { type: String, required: false }, 
-  
-  avatar: { type: String, default: null },
+  avatar: { 
+      type: String, 
+      default: null 
+  },
+
+  // ✨ STATUS (Unificado)
   status: {
     type: String,
-    enum: ["online", "offline", "typing"],
-    default: "offline"
+    enum: ["online", "offline", "typing"], // Solo permite estos valores
+    default: "online" // Al registrarse, nacen "online"
   }
 }, { timestamps: true });
 

@@ -4,6 +4,12 @@ const User = require('../globalModels/User');
 const bcrypt = require('bcrypt');
 const { publishEvent } = require('../events/publisher'); 
 
+// ✨ NUEVA FUNCIÓN AUXILIAR
+// Genera un código de 6 caracteres (Ej: "K9X2QA")
+function generateFriendId() {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
 // ===================================================
 // 🟢 Registro Manual (Email/Pass)
 // ===================================================
@@ -16,10 +22,14 @@ exports.register = async ({ name, email, password }) => {
 
   const hashed = await bcrypt.hash(password, 10);
   
+  // ✨ Generamos el ID único antes de crear
+  const newFriendId = generateFriendId();
+
   const user = await User.create({
     name: name.trim(),
     email: emailClean,
     password: hashed,
+    friendId: newFriendId, // 👈 ¡ESTA LÍNEA ES VITAL!
     status: 'online'
   });
 

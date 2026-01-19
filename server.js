@@ -15,9 +15,11 @@ const config = require('./config');
 const routes = require('./network/routes');
 
 // Importaciones de Sistemas Globales
-const { initWSS, closeRedis } = require('./wsServer');
+// 🔧 CORRECCIÓN: Importamos 'closeRedis' como 'closeWsRedis' para diferenciarlo del global
+const { initWSS, closeRedis: closeWsRedis } = require('./wsServer');
 const { initSubscriber } = require('./events/dispatcher'); 
-const { publicLimiter } = require('./middleware/rateLimiter'); 
+const { publicLimiter } = require('./middleware/rateLimiter');
+const redisUtils = require('./utils/redis'); // Importamos utilidades globales de Redis
 
 // Importar los inicializadores de Handlers
 const authHandlers = require('./Auth/events/handlers'); 
@@ -68,7 +70,7 @@ app.use(
 const allowedOrigins = [
   'http://localhost:3000',
   'https://localhost:3000',
-  'http://127.0.0.1:3000', // IP para evitar bloqueos locales
+  'http://127.0.0.1:3000', 
   config.frontendUrl,
 ].filter(Boolean);
 
@@ -93,11 +95,9 @@ app.use(
 // ===================================================
 app.use(publicLimiter); 
 
-// 🔥 CORRECCIÓN APLICADA AQUÍ 🔥
 // ===================================================
 // 🩺 Endpoint de healthcheck (PRIMERO)
 // ===================================================
-// Debe ir ANTES de app.use('/', routes) para evitar que el 404 lo capture
 app.get('/health', (req, res) => {
   res.status(200).json({
     ok: true,
@@ -132,18 +132,32 @@ const runningServer = server.listen(PORT, '0.0.0.0', () => {
 });
 
 // ===================================================
-// 🛑 Graceful Shutdown
+// 🛑 Graceful Shutdown (Limpieza Total)
 // ===================================================
 async function gracefulShutdown(signal) {
   console.log(`\n🛑 Recibida señal ${signal}. Cerrando ordenadamente...`);
+  
+  // 1. Cerrar entrada de nuevas peticiones HTTP
   runningServer.close(() => {
     console.log('🌑 Servidor HTTP cerrado.');
   });
 
   try {
-    await closeRedis();
+    // 2. Cerrar clientes Redis del WebSocket (Pub/Sub)
+    if (closeWsRedis) {
+        await closeWsRedis();
+        console.log('🔌 Conexiones Redis WS cerradas.');
+    }
+
+    // 3. Cerrar clientes Redis Globales (si tu utils/redis lo soporta)
+    if (redisUtils.closeAllClients) {
+        await redisUtils.closeAllClients();
+    }
+
+    // 4. Cerrar Mongo
     await mongoose.connection.close(false);
     console.log('🍃 Conexión MongoDB cerrada.');
+    
     console.log('✅ Cierre completado con éxito.');
     process.exit(0);
   } catch (err) {
