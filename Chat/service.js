@@ -6,7 +6,7 @@ const UserGuest = require('../globalModels/UserGuest');
 const mongoose = require('mongoose');
 
 // =======================================================
-// 🟢 Crear o recuperar conversación
+// 🟢 Create or retrieve conversation
 // =======================================================
 exports.getOrCreateConversation = async (participants) => {
     const ids = [];
@@ -20,7 +20,6 @@ exports.getOrCreateConversation = async (participants) => {
         models.push(user.isGuest ? 'UserGuest' : 'User');
     }
     
-    // Buscar si existe (coincidencia exacta de participantes)
     let convo = await Conversation.findOne({
         participants: { $all: ids, $size: ids.length }
     });
@@ -36,13 +35,12 @@ exports.getOrCreateConversation = async (participants) => {
 };
 
 // =======================================================
-// 🟢 Enviar mensaje
+// 🟢 Send message
 // =======================================================
 exports.sendMessage = async (conversationId, senderId, text) => {
     const convo = await Conversation.findById(conversationId);
     if (!convo) throw new Error('Conversación no encontrada');
     
-    // Determinar modelo del sender
     let sender = await User.findById(senderId);
     let senderModel = 'User';
     
@@ -59,17 +57,14 @@ exports.sendMessage = async (conversationId, senderId, text) => {
     };
     
     convo.messages.push(message);
-    // lastMessage se actualiza solo gracias a tu middleware .pre('save')
     await convo.save();
     return message;
 };
 
 // =======================================================
-// 🟢 Obtener mensajes
+// 🟢 Get messages
 // =======================================================
 exports.getMessages = async (conversationId) => {
-    // Aquí mantenemos populate porque es una sola conversación y es eficiente
-    // para paginación futura.
     const convo = await Conversation.findById(conversationId)
         .populate({ path: 'messages.sender', select: 'name email avatar' });
         
@@ -78,7 +73,7 @@ exports.getMessages = async (conversationId) => {
 };
 
 // =======================================================
-// ⚡ QUERY OPTIMIZADA: Get By User (Aggregation)
+// ⚡ OPTIMIZED QUERY: Get By User (Aggregation)
 // =======================================================
 exports.getByUser = async (userId) => {
     if (!userId) return [];
@@ -86,17 +81,12 @@ exports.getByUser = async (userId) => {
     const userObjectId = new mongoose.Types.ObjectId(userId);
 
     return await Conversation.aggregate([
-        // 1. MATCH: Filtrar chats donde estoy yo
         { 
             $match: { participants: userObjectId } 
         },
-
-        // 2. LOOKUP POLIMÓRFICO: 
-        // Como 'participants' tiene IDs mezclados de Users y Guests, 
-        // y Aggregation no lee 'refPath', hacemos lookup a ambas tablas.
         {
             $lookup: {
-                from: 'users', // Colección real de MongoDB
+                from: 'users', 
                 localField: 'participants',
                 foreignField: '_id',
                 as: 'usersFound'
@@ -104,42 +94,29 @@ exports.getByUser = async (userId) => {
         },
         {
             $lookup: {
-                from: 'userguests', // Colección real de MongoDB
+                from: 'userguests', 
                 localField: 'participants',
                 foreignField: '_id',
                 as: 'guestsFound'
             }
         },
-
-        // 3. PROYECCIÓN INTELIGENTE
-        // Fusionamos los usuarios encontrados y extraemos el último mensaje del array
         {
             $project: {
                 _id: 1,
                 updatedAt: 1,
-                // Extraer el último mensaje del array embebido 'messages'
                 lastMessageData: { $arrayElemAt: ["$messages", -1] },
-                
-                // Unir los dos arrays de usuarios encontrados en uno solo
                 allParticipants: { $concatArrays: ["$usersFound", "$guestsFound"] }
             }
         },
-
-        // 4. LIMPIEZA FINAL
-        // Formateamos para que el Frontend reciba exactamente lo que espera
         {
             $project: {
                 id: "$_id",
                 _id: 1,
                 updatedAt: 1,
-                
-                // Info del último mensaje
                 lastMessage: {
                     text: "$lastMessageData.text",
                     createdAt: "$lastMessageData.createdAt"
                 },
-
-                // Lista de participantes limpia (sin passwords, etc.)
                 participants: {
                     $map: {
                         input: "$allParticipants",
@@ -149,17 +126,29 @@ exports.getByUser = async (userId) => {
                             name: "$$p.name",
                             email: "$$p.email",
                             avatar: "$$p.avatar",
-                            friendId: "$$p.friendId", // Tu nueva feature
-                            isGuest: { $ifNull: ["$$p.isGuest", false] } // Flag útil
+                            friendId: "$$p.friendId", 
+                            isGuest: { $ifNull: ["$$p.isGuest", false] } 
                         }
                     }
                 }
             }
         },
-
-        // 5. SORT: Lo más reciente primero (usando el timestamp del chat o del mensaje)
         {
             $sort: { updatedAt: -1 }
         }
     ]);
+};
+
+// =======================================================
+// 🔍 FIND USER BY FRIEND ID (New Feature)
+// =======================================================
+exports.findUserByFriendId = async (friendId) => {
+    // Search only necessary fields, no passwords
+    const user = await User.findOne({ friendId: friendId })
+        .select('_id name avatar friendId email');
+    
+    if (!user) {
+        throw new Error('Usuario no encontrado');
+    }
+    return user;
 };

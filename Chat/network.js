@@ -3,16 +3,36 @@
 const express = require('express');
 const router = express.Router();
 const controller = require('./controller');
-const response = require('../network/response'); // Ajusta la ruta a tu helper de respuesta
-const auth = require('../middleware'); // Ajusta la ruta a tu middleware
+const response = require('../network/response'); 
+const auth = require('../middleware'); 
 
 // =====================================================================
-// 🟢 Crear/obtener conversación
+// 🔍 SEARCH USER BY FRIEND ID
 // =====================================================================
-router.post('/conversation', auth, function (req, res) {
-    const { participants } = req.body;
+router.get('/search/:friendId', auth, function (req, res) {
+    controller.searchUser(req.params.friendId)
+        .then((user) => {
+            response.success(req, res, user, 200);
+        })
+        .catch((e) => {
+            // 404 if not found
+            response.error(req, res, e.message, 404);
+        });
+});
+
+// =====================================================================
+// 🟢 CREATE/GET CONVERSATION (Called when pressing Enter in search)
+// =====================================================================
+// Adjusted to root '/' to match standard REST and your frontend call likely being /chat
+router.post('/', auth, function (req, res) {
+    // If the frontend sends { userId: '...' }, we convert it to participants array here
+    // OR if it sends { participants: [...] }, we use that.
+    let { participants, userId } = req.body;
+
+    if (userId) {
+        participants = [req.user.id, userId];
+    }
     
-    // Validación básica de HTTP antes de llamar al controller
     if (!participants || !Array.isArray(participants)) {
         return response.error(req, res, 'Participantes inválidos', 400);
     }
@@ -27,12 +47,12 @@ router.post('/conversation', auth, function (req, res) {
 });
 
 // =====================================================================
-// 🟢 Enviar mensaje
+// 🟢 SEND MESSAGE
 // =====================================================================
 router.post('/:conversationId/message', auth, function (req, res) {
     const { conversationId } = req.params;
     const { text } = req.body;
-    const senderId = req.user.id; // Extraído por el middleware
+    const senderId = req.user.id; 
 
     controller.sendMessage(conversationId, senderId, text)
         .then((data) => {
@@ -44,7 +64,7 @@ router.post('/:conversationId/message', auth, function (req, res) {
 });
 
 // =====================================================================
-// 🟢 Obtener mensajes de un chat
+// 🟢 GET MESSAGES
 // =====================================================================
 router.get('/:conversationId/messages', auth, function (req, res) {
     controller.getMessages(req.params.conversationId)
@@ -57,10 +77,9 @@ router.get('/:conversationId/messages', auth, function (req, res) {
 });
 
 // =====================================================================
-// 🟢 Mis Chats (El que fallaba)
+// 🟢 MY CHATS
 // =====================================================================
 router.get('/user/me', auth, function (req, res) {
-    // Validación de capa de red: Invitados no pasan
     if (req.user.isGuest) {
         return response.error(req, res, 'Invitados no tienen historial', 403);
     }
@@ -72,7 +91,6 @@ router.get('/user/me', auth, function (req, res) {
             response.success(req, res, list, 200);
         })
         .catch((e) => {
-            // Aquí caerá el error si el service falla, pero ya lo arreglamos
             response.error(req, res, e.message, 500);
         });
 });

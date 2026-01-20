@@ -27,8 +27,15 @@ function getByUser(userId) {
     if (!userId) {
         return Promise.reject('Usuario inválido');
     }
-    // Llama al servicio que contiene el fix de Mongoose
     return service.getByUser(userId);
+}
+
+// 👇 NEW FUNCTION
+function searchUser(friendId) {
+    if (!friendId) {
+        return Promise.reject('ID de amigo necesario');
+    }
+    return service.findUserByFriendId(friendId);
 }
 
 module.exports = {
@@ -36,4 +43,5 @@ module.exports = {
     sendMessage,
     getMessages,
     getByUser,
+    searchUser, // Exported here
 };
