@@ -12,6 +12,10 @@ const chatRoutes = require('../Chat/network');
 const chatListRoutes = require('../ChatList/network');
 const inviteRoutes = require('../Invite/network');
 const mediaProxyRoutes = require('../MediaProxy/network');
+
+// 🔧 CORRECCIÓN AQUÍ: Usamos '../' igual que los demás
+const friendRoutes = require('../Friend/network'); 
+
 // ===================================================
 // 🔓 Rutas Públicas (Public Layer)
 // ===================================================
@@ -21,15 +25,17 @@ router.use('/invite', inviteRoutes);
 // ===================================================
 // ⚖️ Rutas Híbridas (Auth delegada al controlador)
 // ===================================================
-/* El componente Chat maneja su propia lógica de seguridad:
-  - Tokens de usuario real vs. Tokens de invitado.
-*/
+/* El componente Chat maneja su propia lógica de seguridad */
 router.use('/chat', chatRoutes);
+
+// 🔧 RECOMENDACIÓN: Mover aquí o abajo.
+// Aunque 'friendRoutes' tiene su propio auth interno (router.use(auth)),
+// semánticamente no es pública. Funciona aquí, pero es más ordenado:
+router.use('/friend', friendRoutes); 
 
 // ===================================================
 // 🔒 Rutas Protegidas (Secure Layer)
 // ===================================================
-// Middleware aplicado explícitamente antes de entrar al componente
 router.use('/chatlist', authMiddleware, chatListRoutes);
 
 // ===================================================
@@ -46,14 +52,13 @@ router.get('/', (req, res) => {
 router.use('/media', mediaProxyRoutes);
 
 // ===================================================
-// 🚫 Catch-All 404 (Para evitar HTML en la API)
+// 🚫 Catch-All 404
 // ===================================================
-// Esto asegura que si piden una ruta que no existe, reciban JSON y no HTML
 router.use('*', (req, res) => {
   res.status(404).json({
     error: true,
     message: `Ruta no encontrada: ${req.originalUrl}`,
-    valid_endpoints: ['/auth', '/invite', '/chat', '/chatlist']
+    valid_endpoints: ['/auth', '/invite', '/chat', '/chatlist', '/friend']
   });
 });
 

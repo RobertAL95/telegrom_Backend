@@ -13,22 +13,32 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 // ⚙️ Configuración y conexión del cliente principal
 // ==================================================
 const redis = new Redis(REDIS_URL, {
-  maxRetriesPerRequest: null, 
-  enableReadyCheck: true,    
-  reconnectOnError: (err) => {
-    const targetErrors = ['READONLY', 'ETIMEDOUT', 'ECONNRESET'];
-    const shouldReconnect = targetErrors.some(e => err.message.includes(e));
-    if (shouldReconnect) {
-      console.warn('🔄 Reintentando conexión Redis por error:', err.message);
-    }
-    return shouldReconnect;
-  },
-  retryStrategy: (times) => {
-    const delay = Math.min(times * 100, 3000);
-    console.log(`⏳ Intento de reconexión Redis #${times}, reintentando en ${delay}ms`);
-    return delay;
-  },
+  maxRetriesPerRequest: null, 
+  enableReadyCheck: true,    
+  reconnectOnError: (err) => {
+    const targetErrors = ['READONLY', 'ETIMEDOUT', 'ECONNRESET'];
+    const shouldReconnect = targetErrors.some(e => err.message.includes(e));
+    if (shouldReconnect) {
+      console.warn('🔄 Reintentando conexión Redis por error:', err.message);
+    }
+    return shouldReconnect;
+  },
+  retryStrategy: (times) => {
+    const delay = Math.min(times * 100, 3000);
+    console.log(`⏳ Intento de reconexión Redis #${times}, reintentando en ${delay}ms`);
+    return delay;
+  },
 });
+
+// ==================================================
+// 📢 Definición de Canales (Pub/Sub)
+// ==================================================
+// Centralizamos los nombres de los canales aquí para evitar errores de escritura
+redis.CHANNELS = {
+    CHAT: 'CHAT_GLOBAL_CHANNEL',
+    SYSTEM: 'system_events',
+    NOTIFICATIONS: 'NOTIFICATION_CHANNEL' // 👈 Nuevo canal agregado
+};
 
 // ==================================================
 // 🧠 Eventos de diagnóstico
@@ -40,9 +50,9 @@ redis.on('close', () => console.warn('⚠️ Conexión a Redis cerrada'));
 redis.on('reconnecting', () => console.log('🔄 Reintentando conexión Redis...'));
 
 // ==================================================
-// 🧩 Método helper duplicado (Publisher/Subscriber/Rate Limiter)
+// 🧩 Método helper duplicado (Publisher/Subscriber)
 // ==================================================
-// Ahora rastreamos cada cliente duplicado
+// Crea un nuevo cliente y lo rastrea para cerrarlo limpiamente después
 redis.createClient = () => {
     const client = redis.duplicate();
     activeClients.add(client);
@@ -50,7 +60,7 @@ redis.createClient = () => {
 };
 
 /**
- * 🟢 Cierra todos los clientes duplicados de Redis rastreados.
+ * 🟢 Cierra todos los clientes duplicados de Redis rastreados y el principal.
  */
 redis.closeAllClients = async () => {
     const promises = [];
@@ -60,6 +70,7 @@ redis.closeAllClients = async () => {
     }
     await Promise.all(promises);
     activeClients.clear();
+    
     // Cerramos el cliente principal también
     await redis.quit(); 
     console.log('🔴 Todos los clientes Redis (Principal + Duplicados) cerrados.');
