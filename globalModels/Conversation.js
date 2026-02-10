@@ -4,28 +4,33 @@ const MessageSchema = new mongoose.Schema({
   sender: { 
     type: mongoose.Schema.Types.ObjectId, 
     required: true,
-    refPath: "messages.senderModel" // Referencia dinámica interna
+    refPath: "messages.senderModel" 
   },
   senderModel: {
     type: String,
     required: true,
     enum: ["User", "UserGuest"],
   },
-  text: { type: String, required: true },
+  // 👇 CAMBIO 1: Quitamos 'required: true' del texto, porque puede ser solo una foto
+  text: { type: String, default: "" }, 
+  
+  // 👇 CAMBIO 2: Agregamos el campo 'media' para guardar la info de Cloudinary
+  media: {
+    url: { type: String },       // La URL de la imagen/video
+    type: { type: String },      // 'image/png', 'video/mp4', etc.
+    public_id: { type: String }  // ID de Cloudinary (para borrarla después si hace falta)
+  },
+  
   createdAt: { type: Date, default: Date.now }
 });
 
 const ConversationSchema = new mongoose.Schema({
-  // 🔥 CORRECCIÓN CRÍTICA:
-  // Cambiamos 'participants' a un array simple de IDs para que coincida con tu Service.
-  // Usamos refPath para que el populate sepa si buscar en 'User' o 'UserGuest'.
   participants: [{
     type: mongoose.Schema.Types.ObjectId,
     required: true,
-    refPath: 'participantsModel' // <--- Mongoose mirará el array paralelo
+    refPath: 'participantsModel'
   }],
 
-  // Agregamos este campo que tu service.js YA estaba intentando guardar
   participantsModel: [{
     type: String,
     required: true,
@@ -36,10 +41,23 @@ const ConversationSchema = new mongoose.Schema({
   lastMessage: { type: String, default: "" },
 }, { timestamps: true });
 
-// Middleware para actualizar lastMessage automáticamente
+// 👇 CAMBIO 3: Mejoramos la vista previa del último mensaje
 ConversationSchema.pre("save", function(next) {
   if (this.messages && this.messages.length > 0) {
-    this.lastMessage = this.messages[this.messages.length - 1].text;
+    const lastMsg = this.messages[this.messages.length - 1];
+    
+    // Si hay texto, mostramos el texto.
+    if (lastMsg.text && lastMsg.text.trim().length > 0) {
+        this.lastMessage = lastMsg.text;
+    } 
+    // Si no hay texto pero hay media, mostramos un indicador
+    else if (lastMsg.media && lastMsg.media.url) {
+        this.lastMessage = "📷 Multimedia";
+    } 
+    // Fallback
+    else {
+        this.lastMessage = "";
+    }
   }
   next();
 });

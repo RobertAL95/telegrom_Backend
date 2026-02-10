@@ -177,17 +177,25 @@ function initWSS(server) {
                 return;
             }
 
-            if ((data.type === 'message' || data.text) && ws.roomId) {
-                const textToSend = data.text || data.payload?.text;
-                if (!textToSend || !textToSend.trim()) return;
+            // 👇 CORRECCIÓN PARA MULTIMEDIA
+            if ((data.type === 'message') && ws.roomId) {
+                const textToSend = data.text || data.payload?.text || ''; // Puede ir vacío si es solo foto
+                const mediaData = data.media || data.payload?.media || null; // 👈 Capturamos media
 
-                const savedMessage = await chatService.sendMessage(ws.roomId, userId, textToSend);
+                // Validamos que haya ALGO que enviar (texto O media)
+                if (!textToSend.trim() && !mediaData) return;
+
+                // Guardamos en Base de Datos (Pasando media también)
+                const savedMessage = await chatService.sendMessage(ws.roomId, userId, textToSend, mediaData);
                 
+                // Reenviamos a todos en la sala (Incluyendo media)
                 publishToRoom(ws.roomId, { 
                     type: 'message', 
                     payload: {
+                        _id: savedMessage._id, // Importante para keys de React
                         from: userId, 
                         text: savedMessage.text, 
+                        media: savedMessage.media, // 👈 ¡Aquí va la foto!
                         timestamp: savedMessage.timestamp,
                         name: userName,
                         senderModel: savedMessage.senderModel 
@@ -199,7 +207,6 @@ function initWSS(server) {
             console.error('Error handling WS message:', e);
         }
       });
-
       // 7. Desconexión
       ws.on('close', () => {
         if (ws.roomId && rooms.has(ws.roomId)) {

@@ -37,7 +37,7 @@ exports.getOrCreateConversation = async (participants) => {
 // =======================================================
 // 🟢 Send message
 // =======================================================
-exports.sendMessage = async (conversationId, senderId, text) => {
+exports.sendMessage = async (conversationId, senderId, text, media = null) => { // 👈 1. Agregamos 'media' opcional
     const convo = await Conversation.findById(conversationId);
     if (!convo) throw new Error('Conversación no encontrada');
     
@@ -53,14 +53,19 @@ exports.sendMessage = async (conversationId, senderId, text) => {
     const message = {
         sender: sender._id,
         senderModel,
-        text
+        text: text || '', // Evita undefined si envías solo foto
+        media: media      // 👈 2. Guardamos el objeto media
     };
     
+    // Al hacer push, Mongoose crea el subdocumento (con _id y timestamp si está en el esquema)
     convo.messages.push(message);
     await convo.save();
-    return message;
-};
 
+    // 👇 3. Devolvemos el último mensaje del array
+    // Hacemos esto para devolver el objeto COMPLETO que incluye el '_id' generado por Mongo
+    // y el 'timestamp' real, que son vitales para el Frontend.
+    return convo.messages[convo.messages.length - 1];
+};
 // =======================================================
 // 🟢 Get messages
 // =======================================================

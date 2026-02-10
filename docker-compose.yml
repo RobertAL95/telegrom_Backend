@@ -25,6 +25,12 @@ services:
       # 🔴 Redis
       REDIS_URL: redis://redis:6379
 
+      # ☁️ CLOUDINARY (👇 ESTO ES LO QUE FALTABA AGREGAR)
+      # Docker leerá estos valores de tu archivo .env local
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET}
+
     depends_on:
       mongo:
         condition: service_healthy
@@ -34,28 +40,23 @@ services:
     networks:
       - flymnet
 
-    # 🔥🔥🔥 EL CAMBIO MAGICO ESTÁ AQUÍ 🔥🔥🔥
+    # 🔥🔥🔥 VOLÚMENES (SIN CAMBIOS) 🔥🔥🔥
     volumes:
-      # 1. Mapea tu carpeta actual (.) a la carpeta de trabajo del contenedor (/app)
       - ./:/app
-      # 2. IMPORTANTE: Evita que tu node_modules local (Windows) sobrescriba el del contenedor (Linux)
       - /app/node_modules
 
     restart: unless-stopped
-    
-    # RECOMENDACIÓN: Si tienes nodemon, usa 'npm run dev'. 
-    # Si no, usa 'node server.js' pero tendrás que reiniciar el contenedor manualmente al cambiar código.
     command: npm run dev 
 
     # 🛡️ LÍMITES DE RECURSOS (BACKEND)
     deploy:
       resources:
         limits:
-          cpus: '0.50'     # Máximo 50% de un núcleo
-          memory: 1G       # Máximo 1GB de RAM (Suficiente para dev)
+          cpus: '0.50'
+          memory: 1G
 
   # =====================================================
-  # 🍃 MongoDB
+  # 🍃 MongoDB (SIN CAMBIOS)
   # =====================================================
   mongo:
     image: mongo:6
@@ -73,16 +74,14 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
-    
-    # 🛡️ LÍMITES DE RECURSOS (MONGO)
     deploy:
       resources:
         limits:
           cpus: '0.50'
-          memory: 1G       # Mongo necesita algo de caché, 1GB está bien para dev
+          memory: 1G
 
   # =====================================================
-  # 🔴 Redis
+  # 🔴 Redis (SIN CAMBIOS)
   # =====================================================
   redis:
     image: redis:7
@@ -99,16 +98,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-    # 🛡️ LÍMITES DE RECURSOS (REDIS)
     deploy:
       resources:
         limits:
-          cpus: '0.25'     # Redis es muy ligero
-          memory: 128M     # Con 128MB le sobra para chat
+          cpus: '0.25'
+          memory: 128M
 
   # =====================================================
-  # 🧭 Mongo Express (GUI web)
+  # 🧭 Mongo Express (SIN CAMBIOS)
   # =====================================================
   mongo-express:
     image: mongo-express:latest
@@ -126,23 +123,15 @@ services:
         condition: service_healthy
     networks:
       - flymnet
-    
-    # 🛡️ LÍMITES DE RECURSOS (GUI)
     deploy:
       resources:
         limits:
           cpus: '0.25'
-          memory: 200M     # UI ligera
+          memory: 200M
 
-# =====================================================
-# Volúmenes persistentes
-# =====================================================
 volumes:
   mongo_data:
 
-# =====================================================
-# Red de comunicación interna
-# =====================================================
 networks:
   flymnet:
     driver: bridge

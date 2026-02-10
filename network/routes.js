@@ -11,35 +11,34 @@ const authRoutes = require('../Auth/network');
 const chatRoutes = require('../Chat/network');
 const chatListRoutes = require('../ChatList/network');
 const inviteRoutes = require('../Invite/network');
-const mediaProxyRoutes = require('../MediaProxy/network');
-
-// 🔧 CORRECCIÓN AQUÍ: Usamos '../' igual que los demás
 const friendRoutes = require('../Friend/network'); 
 
+// 👇 AQUÍ ESTÁ EL CAMBIO: Usamos el módulo Media nuevo
+const mediaRoutes = require('../Media/network'); 
+
 // ===================================================
-// 🔓 Rutas Públicas (Public Layer)
+// 🔓 Rutas Públicas
 // ===================================================
 router.use('/auth', authRoutes);
 router.use('/invite', inviteRoutes);
 
 // ===================================================
-// ⚖️ Rutas Híbridas (Auth delegada al controlador)
+// ⚖️ Rutas Híbridas
 // ===================================================
-/* El componente Chat maneja su propia lógica de seguridad */
 router.use('/chat', chatRoutes);
-
-// 🔧 RECOMENDACIÓN: Mover aquí o abajo.
-// Aunque 'friendRoutes' tiene su propio auth interno (router.use(auth)),
-// semánticamente no es pública. Funciona aquí, pero es más ordenado:
 router.use('/friend', friendRoutes); 
 
 // ===================================================
-// 🔒 Rutas Protegidas (Secure Layer)
+// 🔒 Rutas Protegidas
 // ===================================================
 router.use('/chatlist', authMiddleware, chatListRoutes);
 
+// 👇 CONECTAMOS LA RUTA MEDIA
+// Ahora /media/upload funcionará
+router.use('/media', mediaRoutes);
+
 // ===================================================
-// 🔸 Health Check / Root API
+// 🔸 Health Check
 // ===================================================
 router.get('/', (req, res) => {
   res.status(200).json({ 
@@ -49,8 +48,6 @@ router.get('/', (req, res) => {
   });
 });
 
-router.use('/media', mediaProxyRoutes);
-
 // ===================================================
 // 🚫 Catch-All 404
 // ===================================================
@@ -58,7 +55,7 @@ router.use('*', (req, res) => {
   res.status(404).json({
     error: true,
     message: `Ruta no encontrada: ${req.originalUrl}`,
-    valid_endpoints: ['/auth', '/invite', '/chat', '/chatlist', '/friend']
+    valid_endpoints: ['/auth', '/invite', '/chat', '/chatlist', '/friend', '/media']
   });
 });
 
