@@ -11,16 +11,15 @@ const chatService = require('./Chat/service');
 // ===============================================
 // 🔴 Redis: Pub/Sub
 // ===============================================
-// Creamos clientes dedicados para Pub/Sub
 const pubClient = redis.createClient();
 const subClient = redis.createClient();
 const CHAT_CHANNEL = 'CHAT_GLOBAL_CHANNEL';
 const SYSTEM_CHANNEL = 'system_events';
-const NOTIFICATION_CHANNEL = 'NOTIFICATION_CHANNEL'; // Nuevo canal para notificaciones
+const NOTIFICATION_CHANNEL = 'NOTIFICATION_CHANNEL'; 
 
 subClient.subscribe(CHAT_CHANNEL);
 subClient.subscribe(SYSTEM_CHANNEL);
-subClient.subscribe(NOTIFICATION_CHANNEL); // Suscribirse al canal de notificaciones
+subClient.subscribe(NOTIFICATION_CHANNEL); 
 
 // ===============================================
 // 🧠 Estado local
@@ -42,7 +41,7 @@ subClient.on('message', (channel, message) => {
     else if (channel === SYSTEM_CHANNEL) {
       handleSystemEvent(parsed);
     }
-    // Manejar notificaciones directas al usuario
+    // Manejar notificaciones directas al usuario (¡AQUÍ LLEGAN LOS MENSAJES AHORA!)
     else if (channel === NOTIFICATION_CHANNEL) {
       const { userId, payload } = parsed;
       sendToUser(userId, payload);
@@ -103,20 +102,19 @@ function initWSS(server) {
       const userName = decoded.name || 'Usuario';
       
       // 2. Registrar Usuario
-      // Convertir userId a string para usar como clave en el Map
-      const userIdStr = userId.toString(); // Asegurar consistencia en la clave
+      const userIdStr = userId.toString(); 
       if (!userSockets.has(userIdStr)) userSockets.set(userIdStr, new Set());
       userSockets.get(userIdStr).add(ws);
 
       ws.userId = userIdStr;
       ws.userName = userName;
       ws.roomId = null; 
-      ws.isAlive = true; // Para Heartbeat
+      ws.isAlive = true; 
 
-      // 3. Heartbeat (Ping/Pong) para evitar desconexiones fantasma
+      // 3. Heartbeat
       ws.on('pong', () => { ws.isAlive = true; });
 
-      // 4. Helper: Unirse a sala con validación
+      // 4. Helper: Unirse a sala
       const joinRoomHandler = async (roomIdToJoin) => {
           try {
             const conversation = await Conversation.findById(roomIdToJoin, 'participants').lean();
@@ -129,7 +127,7 @@ function initWSS(server) {
             const isParticipant = conversation.participants.some(p => p.toString() === userId.toString());
 
             if (!isParticipant) {
-                console.warn(`⛔ Acceso denegado: ${userName} (${userId}) a sala ${roomIdToJoin}`);
+                console.warn(`⛔ Acceso denegado: ${userName} a sala ${roomIdToJoin}`);
                 ws.send(JSON.stringify({ type: 'error', message: 'No tienes acceso a este chat' }));
                 return false;
             }
@@ -144,7 +142,6 @@ function initWSS(server) {
             ws.roomId = roomIdToJoin;
 
             console.log(`🟢 WS: ${userName} se unió a ${roomIdToJoin}`);
-            
             ws.send(JSON.stringify({ type: 'room_joined', roomId: roomIdToJoin }));
             return true;
 
@@ -154,7 +151,6 @@ function initWSS(server) {
           }
       };
 
-      // 5. Auto-join inicial (si viene en URL)
       if (initialRoomId) {
          await joinRoomHandler(initialRoomId);
       }
@@ -177,36 +173,46 @@ function initWSS(server) {
                 return;
             }
 
-            // 👇 CORRECCIÓN PARA MULTIMEDIA
+            // 🔥 NUEVA LÓGICA DE MENSAJES OMNIPRESENTE (ESTILO WHATSAPP)
             if ((data.type === 'message') && ws.roomId) {
-                const textToSend = data.text || data.payload?.text || ''; // Puede ir vacío si es solo foto
-                const mediaData = data.media || data.payload?.media || null; // 👈 Capturamos media
+                const textToSend = data.text || data.payload?.text || ''; 
+                const mediaData = data.media || data.payload?.media || null; 
 
-                // Validamos que haya ALGO que enviar (texto O media)
                 if (!textToSend.trim() && !mediaData) return;
 
-                // Guardamos en Base de Datos (Pasando media también)
+                // 1. Guardamos en BD
                 const savedMessage = await chatService.sendMessage(ws.roomId, userId, textToSend, mediaData);
                 
-                // Reenviamos a todos en la sala (Incluyendo media)
-                publishToRoom(ws.roomId, { 
-                    type: 'message', 
-                    payload: {
-                        _id: savedMessage._id, // Importante para keys de React
-                        from: userId, 
-                        text: savedMessage.text, 
-                        media: savedMessage.media, // 👈 ¡Aquí va la foto!
-                        timestamp: savedMessage.timestamp,
-                        name: userName,
-                        senderModel: savedMessage.senderModel 
-                    } 
-                });
+                // 2. Buscamos a TODOS los participantes de este chat
+                const conversation = await Conversation.findById(ws.roomId, 'participants').lean();
+                
+                if (conversation && conversation.participants) {
+                    const messagePayload = { 
+                        type: 'message', 
+                        chatId: ws.roomId.toString(), // Enviamos el ID del chat para el frontend
+                        payload: {
+                            _id: savedMessage._id, 
+                            from: userId.toString(), 
+                            text: savedMessage.text, 
+                            media: savedMessage.media, 
+                            timestamp: savedMessage.timestamp,
+                            name: userName,
+                            senderModel: savedMessage.senderModel 
+                        } 
+                    };
+
+                    // 3. Disparamos la notificación a cada participante, estén o no con el chat abierto
+                    conversation.participants.forEach(participantId => {
+                        notifyUser(participantId.toString(), messagePayload);
+                    });
+                }
             }
 
         } catch (e) {
             console.error('Error handling WS message:', e);
         }
       });
+
       // 7. Desconexión
       ws.on('close', () => {
         if (ws.roomId && rooms.has(ws.roomId)) {
@@ -245,7 +251,6 @@ function initWSS(server) {
 // ===============================================
 // Helpers
 // ===============================================
-
 function publishToRoom(roomId, data) {
   pubClient.publish(CHAT_CHANNEL, JSON.stringify({ roomId, data }));
 }
@@ -260,12 +265,8 @@ function broadcastToRoom(roomId, data) {
 }
 
 function sendToUser(userId, data) {
-    // Asegurarse de usar string para buscar en el Map
     const userIdStr = userId.toString();
     const sockets = userSockets.get(userIdStr);
-    
-    // Debug log para verificar si el usuario tiene sockets conectados
-    // console.log(`Intentando enviar a ${userIdStr}. Sockets encontrados: ${sockets ? sockets.size : 0}`);
     
     if (!sockets) return;
     
@@ -275,17 +276,13 @@ function sendToUser(userId, data) {
     }
 }
 
-// Función pública para enviar notificaciones a usuarios específicos
-// Esta función publica en Redis para que todas las instancias reciban el evento
 function notifyUser(targetUserId, payload) {
-    // console.log(`Publicando notificación para ${targetUserId}`);
     pubClient.publish(NOTIFICATION_CHANNEL, JSON.stringify({
         userId: targetUserId,
         payload
     }));
 }
 
-// Función para cerrar conexiones Redis al apagar el servidor
 async function closeRedis() {
     console.log("🔌 Cerrando conexiones Pub/Sub de WS...");
     await pubClient.quit();

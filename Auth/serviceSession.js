@@ -30,30 +30,19 @@ function getCookieOptions() {
 // ===================================================
 exports.create = (res, user, isPWA = false) => {
   const currentRefreshTTL = isPWA ? REFRESH_TTL_PWA : REFRESH_TTL_WEB;
-
-  const payload = { 
-    id: user.id || user._id, 
-    email: user.email, 
-    name: user.name 
-  };
+  const payload = { id: user.id || user._id, email: user.email, name: user.name };
 
   const accessToken = signAccess(payload); 
   const refreshToken = signRefresh(payload, currentRefreshTTL); 
   
   const opts = getCookieOptions();
 
-  // Guardamos cookies
   res.cookie('at', accessToken, { ...opts, maxAge: ttlToMs(ACCESS_TTL) });
   res.cookie('rt', refreshToken, { ...opts, maxAge: ttlToMs(currentRefreshTTL) });
   
-  // Debug explícito
-  console.log('🍪 SET-COOKIE:', { 
-      secure: opts.secure, 
-      sameSite: opts.sameSite, 
-      user: user.email 
-  });
+  // ✨ CORTE 1: Devolvemos el accessToken para que el Router pueda usarlo
+  return accessToken; 
 };
-
 // ... (El resto del archivo exports.clear sigue igual)
 exports.clear = (res) => {
   const opts = getCookieOptions();

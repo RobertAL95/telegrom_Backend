@@ -3,10 +3,9 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// ✅ CORRECCIÓN: Usamos process.cwd() para apuntar a la raíz del proyecto (/app)
+// ✅ Usamos process.cwd() para apuntar a la raíz
 const TEMP_DIR = path.join(process.cwd(), 'temp_uploads');
 
-// Si la carpeta no existe, la creamos
 if (!fs.existsSync(TEMP_DIR)) {
     fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
@@ -23,7 +22,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
     storage: storage,
-    limits: { fileSize: 100 * 1024 * 1024 } 
+    limits: { fileSize: 100 * 1024 * 1024 } // 100MB
 });
 
 module.exports = upload;

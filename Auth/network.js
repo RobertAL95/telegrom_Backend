@@ -50,21 +50,19 @@ router.post('/login', validate(loginSchema), async (req, res) => {
   try {
     const { user } = await controller.login(req.body);
 
-    // 1. Detección de Dispositivo
     const deviceHeader = req.headers['x-client-device']?.toLowerCase();
     const isPWA = deviceHeader === 'mobile-pwa';
     
-    // 2. Usar el nuevo servicio de sesión
-    sessionService.create(res, user, isPWA); 
+    // ✨ CORTE 2: Atrapamos el token que ahora devuelve la función
+    const token = sessionService.create(res, user, isPWA); 
 
-    // 3. Respuesta estandarizada
-    response.success(req, res, { user, sessionType: isPWA ? 'PWA' : 'WEB' }, 200);
+    // ✨ Y lo enviamos en la respuesta JSON para que el frontend lo guarde
+    response.success(req, res, { user, sessionType: isPWA ? 'PWA' : 'WEB', token }, 200);
   } catch (e) {
     console.error('❌ Error en /auth/login:', e.message);
     response.error(req, res, e.message, 401); 
   }
 });
-
 // ===================================================
 // 🟢 Perfil protegido (profile)
 // ===================================================
@@ -96,7 +94,13 @@ router.get('/profile', auth, async (req, res) => {
 // ===================================================
 router.get('/me', async (req, res) => {
   try {
-    const token = req.cookies?.at;
+    // ✨ CORTE 3: Buscamos el token en las cookies O en el Header Authorization
+    let token = req.cookies?.at;
+    
+    if (!token && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
     if (!token) return response.error(req, res, 'No session', 401);
 
     const user = await controller.getUserFromToken(token);

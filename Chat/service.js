@@ -37,7 +37,7 @@ exports.getOrCreateConversation = async (participants) => {
 // =======================================================
 // 🟢 Send message
 // =======================================================
-exports.sendMessage = async (conversationId, senderId, text, media = null) => { // 👈 1. Agregamos 'media' opcional
+exports.sendMessage = async (conversationId, senderId, text, media = null) => { 
     const convo = await Conversation.findById(conversationId);
     if (!convo) throw new Error('Conversación no encontrada');
     
@@ -53,28 +53,40 @@ exports.sendMessage = async (conversationId, senderId, text, media = null) => { 
     const message = {
         sender: sender._id,
         senderModel,
-        text: text || '', // Evita undefined si envías solo foto
-        media: media      // 👈 2. Guardamos el objeto media
+        text: text || '', 
+        media: media      
     };
     
     // Al hacer push, Mongoose crea el subdocumento (con _id y timestamp si está en el esquema)
     convo.messages.push(message);
     await convo.save();
 
-    // 👇 3. Devolvemos el último mensaje del array
-    // Hacemos esto para devolver el objeto COMPLETO que incluye el '_id' generado por Mongo
-    // y el 'timestamp' real, que son vitales para el Frontend.
     return convo.messages[convo.messages.length - 1];
 };
+
 // =======================================================
-// 🟢 Get messages
+// 🟢 Get messages (Actualizado y Mapeado para el Frontend)
 // =======================================================
 exports.getMessages = async (conversationId) => {
+    // Usamos .lean() para devolver JSON puro (es más rápido)
     const convo = await Conversation.findById(conversationId)
-        .populate({ path: 'messages.sender', select: 'name email avatar' });
+        .populate({ path: 'messages.sender', select: 'name email avatar' })
+        .lean(); 
         
     if (!convo) throw new Error('Conversación no encontrada');
-    return convo.messages;
+
+    // Formateamos los mensajes para que coincidan con la interfaz de React (from, timestamp, media)
+    const formattedMessages = convo.messages.map(msg => ({
+        _id: msg._id,
+        from: msg.sender ? msg.sender._id.toString() : null, 
+        text: msg.text || '',
+        media: msg.media || null, 
+        timestamp: msg.createdAt || msg.timestamp || new Date().toISOString(), 
+        name: msg.sender ? msg.sender.name : 'Desconocido',
+        senderModel: msg.senderModel
+    }));
+
+    return formattedMessages;
 };
 
 // =======================================================
@@ -145,7 +157,7 @@ exports.getByUser = async (userId) => {
 };
 
 // =======================================================
-// 🔍 FIND USER BY FRIEND ID (New Feature)
+// 🔍 FIND USER BY FRIEND ID
 // =======================================================
 exports.findUserByFriendId = async (friendId) => {
     // Search only necessary fields, no passwords

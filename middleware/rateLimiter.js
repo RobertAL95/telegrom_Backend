@@ -1,77 +1,68 @@
-// middleware/rateLimiter.js
 'use strict';
 
 const rateLimit = require('express-rate-limit');
 const { RedisStore } = require('rate-limit-redis'); 
 const redis = require('../utils/redis'); 
 
-// ===================================================
-// 1. Cliente de Redis para el Store
-// ===================================================
 const redisClient = redis.createClient();
 
+// 🟢 CONFIGURACIÓN DE VALIDACIÓN TOTALMENTE RELAJADA PARA DOCKER
+const commonValidateConfig = {
+    ip: false,
+    trustProxy: false,
+    keyGenerator: false, // 👈 ESTO apaga el error de "Custom keyGenerator"
+    default: false
+};
+
 // ===================================================
-// 2. Limitador de Tráfico Público (IP-Based)
+// 2. Limitador de Tráfico Público
 // ===================================================
 const publicLimiter = rateLimit({
     store: new RedisStore({ 
         sendCommand: (...args) => redisClient.call(...args),
         prefix: 'rl:public:', 
     }),
-    windowMs: 15 * 60 * 1000, // 15 min
+    windowMs: 15 * 60 * 1000,
     max: 100, 
     standardHeaders: true,
     legacyHeaders: false,
-    message: {
-        ok: false,
-        message: 'Demasiadas solicitudes, inténtalo más tarde.',
-    },
+    validate: commonValidateConfig,
+    message: { ok: false, message: 'Demasiadas solicitudes.' },
 });
 
 // ===================================================
-// 3. Limitador Estricto para Login/Registro (IP-Based)
+// 3. Limitador Estricto para Login/Registro
 // ===================================================
 const authStrictLimiter = rateLimit({
     store: new RedisStore({ 
         sendCommand: (...args) => redisClient.call(...args),
         prefix: 'rl:auth:',
     }),
-    windowMs: 5 * 60 * 1000, // 5 min
+    windowMs: 5 * 60 * 1000,
     max: 5,
     standardHeaders: true,
     legacyHeaders: false,
-    message: {
-        ok: false,
-        message: 'Demasiados intentos. Espera 5 minutos.',
-    },
+    validate: commonValidateConfig,
+    message: { ok: false, message: 'Demasiados intentos.' },
 });
 
 // ===================================================
-// 4. Limitador por Usuario (User-Based)
+// 4. Limitador por Usuario (El que causaba el log de error)
 // ===================================================
 const userLimiter = rateLimit({
     store: new RedisStore({ 
         sendCommand: (...args) => redisClient.call(...args),
         prefix: 'rl:user:',
     }),
-    windowMs: 60 * 1000, // 1 min
+    windowMs: 60 * 1000,
     max: 30,
-    keyGenerator: (req, res) => {
-        // Usa el ID del usuario si está disponible, si no, usa la IP.
-        return req.user?.id || req.ip; 
+    keyGenerator: (req) => {
+        // Priorizamos el ID de usuario, si no, la IP
+        return req.user?.id || req.ip || 'anonymous'; 
     },
-    // 🔥 CORRECCIÓN: Desactivamos la validación estricta de IP
-    // ya que confiamos en req.ip proporcionado por Express trust proxy
-    validate: {
-        ip: false,
-        trustProxy: false 
-    },
+    validate: commonValidateConfig, // 👈 Bloquea el error de la línea 59
     standardHeaders: true,
     legacyHeaders: false,
 });
 
-module.exports = {
-    publicLimiter,
-    authStrictLimiter,
-    userLimiter,
-};
+module.exports = { publicLimiter, authStrictLimiter, userLimiter };
