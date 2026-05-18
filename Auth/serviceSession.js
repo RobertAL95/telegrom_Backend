@@ -1,51 +1,67 @@
 'use strict';
 
-const {
-  signAccess,
-  signRefresh,
-  ttlToMs,
-  ACCESS_TTL,
-  REFRESH_TTL_WEB, 
-  REFRESH_TTL_PWA, 
+const { 
+    signAccess, 
+    signRefresh, 
+    ttlToMs, 
+    ACCESS_TTL, 
+    REFRESH_TTL_WEB, 
+    REFRESH_TTL_PWA 
 } = require('../utils/jwt');
 
-// ===================================================
-// ⚙️ Helpers para Cookies (FORZADO PARA LOCALHOST)
-// ===================================================
+/**
+ * Configuración centralizada de cookies.
+ * sameSite: 'lax' es adecuado para desarrollo local y navegación estándar.
+ * En producción con dominios diferentes, podrías necesitar 'none' + secure: true.
+ */
 function getCookieOptions() {
-  // 👇 MIENTRAS ESTÉS EN LOCALHOST, ESTO DEBE SER FALSE
-  // Si Docker tiene NODE_ENV=production, esto te rompía todo.
-  const isProd = false; 
+    const isProd = process.env.NODE_ENV === 'production';
 
-  return {
-    httpOnly: true, 
-    secure: isProd, // false -> Permite HTTP
-    sameSite: 'lax', // lax -> Permite navegación local correcta
-    path: '/',
-  };
+    return {
+        httpOnly: true,
+        secure: isProd, 
+        sameSite: 'lax', 
+        path: '/',
+    };
 }
 
-// ===================================================
-// 🟢 Crear Sesión
-// ===================================================
+/**
+ * 🟢 Crea y establece las cookies de sesión.
+ */
 exports.create = (res, user, isPWA = false) => {
-  const currentRefreshTTL = isPWA ? REFRESH_TTL_PWA : REFRESH_TTL_WEB;
-  const payload = { id: user.id || user._id, email: user.email, name: user.name };
+    const currentRefreshTTL = isPWA ? REFRESH_TTL_PWA : REFRESH_TTL_WEB;
 
-  const accessToken = signAccess(payload); 
-  const refreshToken = signRefresh(payload, currentRefreshTTL); 
-  
-  const opts = getCookieOptions();
+    // Estandarización de ID: MongoDB usa _id, pero en el resto del sistema usamos id.
+    const userId = user.id || user._id;
 
-  res.cookie('at', accessToken, { ...opts, maxAge: ttlToMs(ACCESS_TTL) });
-  res.cookie('rt', refreshToken, { ...opts, maxAge: ttlToMs(currentRefreshTTL) });
-  
-  // ✨ CORTE 1: Devolvemos el accessToken para que el Router pueda usarlo
-  return accessToken; 
+    if (!user.friendId) {
+        console.error(`⚠️ Alerta de integridad: Generando sesión para ${userId} sin friendId.`);
+    }
+
+    const payload = { 
+        id: userId, 
+        email: user.email, 
+        name: user.name, 
+        friendId: user.friendId 
+    };
+
+    const accessToken = signAccess(payload); 
+    const refreshToken = signRefresh(payload, currentRefreshTTL); 
+    
+    const opts = getCookieOptions();
+
+    // Inyectamos las cookies
+    res.cookie('at', accessToken, { ...opts, maxAge: ttlToMs(ACCESS_TTL) });
+    res.cookie('rt', refreshToken, { ...opts, maxAge: ttlToMs(currentRefreshTTL) });
+    
+    return { accessToken, refreshToken }; // Retornar para logs o tests internos si es necesario
 };
-// ... (El resto del archivo exports.clear sigue igual)
+
+/**
+ * 🔴 Elimina las cookies de sesión (Logout).
+ */
 exports.clear = (res) => {
-  const opts = getCookieOptions();
-  res.clearCookie('at', opts);
-  res.clearCookie('rt', opts);
+    const opts = getCookieOptions();
+    res.clearCookie('at', opts);
+    res.clearCookie('rt', opts);
 };

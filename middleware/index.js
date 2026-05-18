@@ -1,87 +1,67 @@
 'use strict';
 
-const { verify, decode } = require('../utils/jwt');
-const revocationService = require('../Auth/sessionRevocation'); // <-- Ruta corregida
+const { verify } = require('../utils/jwt');
+const response = require('../network/response'); 
+const revocationService = require('../Auth/sessionRevocation');
+const cookie = require('cookie'); // 🟢 1. Importamos la librería de cookies
 
-// ===================================================
-// 🛡️ Middleware de Autenticación (Usuario Real o Invitado)
-// ===================================================
+async function authMiddleware(req, res, next) {
+    try {
+        // 1. Metadatos de sesión
+        const deviceHeader = req.headers['x-client-device']?.toLowerCase();
+        req.sessionType = deviceHeader === 'mobile-pwa' ? 'PWA' : 'WEB';
 
-// 🔥 CRÍTICO: La función DEBE ser ASÍNCRONA (async) para usar await.
-async function authMiddleware(req, res, next) { 
-  try {
-    // 🟢 1. Detección de Dispositivo y Política
-    const deviceHeader = req.headers['x-client-device']?.toLowerCase();
-    const isPWA = deviceHeader === 'mobile-pwa';
-    req.sessionType = isPWA ? 'PWA' : 'WEB'; 
+        // 🟢 2. CORRECCIÓN: Parseamos la cookie manualmente desde los headers
+        const cookies = cookie.parse(req.headers.cookie || '');
+        let token = cookies.at; 
+        
+        let isGuest = false;
 
-    let token = null;
-    let decoded = null;
-    let isRevoked = false; // Variable para la verificación
+        // 3. Lógica de Invitado (Fallback)
+        if (!token && req.headers['x-guest-token']) {
+            token = req.headers['x-guest-token'];
+            isGuest = true;
+        }
 
-    // ======================================
-    // 🟢 2. Usuario Real → cookie "at"
-    // ======================================
-    if (req.cookies?.at) {
-      token = req.cookies.at;
-      decoded = verify(token); // Verificado por expiración
+        if (!token) {
+            return res.status(401).json({ success: false, message: 'No autenticado' });
+        }
 
-      if (decoded) {
-        // 🔥 CRÍTICO: 1. Verificar Revocación en Redis
-        // Usamos await aquí, por eso la función principal es async.
-        isRevoked = await revocationService.isTokenRevoked(decoded.jti, false); // isRefresh=false para AT
+        // 4. Verificación de Integridad
+        const decoded = verify(token);
+        if (!decoded) {
+            return res.status(401).json({ success: false, message: 'Sesión expirada o inválida' });
+        }
 
-        if (isRevoked) {
-             console.warn(`🚫 Token revocado en Redis: ${decoded.jti}`);
-             return res.status(403).json({ success: false, message: 'Sesión terminada (revocada)' });
-        }
+        // 5. Verificación de Revocación (Solo para usuarios reales, el AT tiene JTI)
+        if (!isGuest && decoded.jti) {
+            const isRevoked = await revocationService.isTokenRevoked(decoded.jti, false);
+            if (isRevoked) {
+                console.warn(`🚫 Intento de acceso con token revocado: ${decoded.jti}`);
+                return res.status(403).json({ success: false, message: 'Sesión terminada' });
+            }
+        }
 
-        // 2. Si no está revocado, proceder
-        req.user = {
-          id: decoded.id,
-          name: decoded.name,
-          email: decoded.email,
-          type: 'user', 
-          isGuest: false,
-          sessionType: req.sessionType
-        };
-        return next();
-      }
-    }
+        // 6. Inyección de Identidad
+        req.user = {
+            id: decoded.id,
+            friendId: decoded.friendId, 
+            name: decoded.name || (isGuest ? 'Invitado' : ''),
+            email: decoded.email,
+            type: isGuest ? 'guest' : 'user',
+            isGuest: isGuest,
+            ...(isGuest && {
+                inviter: decoded.inviter,
+                chatId: decoded.chatId
+            })
+        };
 
-    // ======================================
-    // 🟡 3. Invitado → header "x-guest-token"
-    // ======================================
-    // Aquí puedes decidir si los guest tokens también se revocan en Redis.
-    // Asumiremos que no, por simplicidad, ya que son efímeros por naturaleza.
-    if (req.headers['x-guest-token']) {
-        token = req.headers['x-guest-token'];
-        decoded = verify(token);
+        next();
 
-        if (decoded && decoded.isGuest) {
-            req.user = {
-                id: decoded.id,
-                name: decoded.name || 'Invitado',
-                inviter: decoded.inviter,
-                chatId: decoded.chatId,
-                type: 'guest', 
-                isGuest: true,
-                sessionType: req.sessionType 
-            };
-            return next();
-        }
-    }
-
-    // ======================================
-    // ❌ Ningún token válido encontrado
-    // ======================================
-    return res.status(401).json({ success: false, message: 'No autenticado' });
-
-  } catch (err) {
-    console.error('❌ Error en authMiddleware:', err.message);
-    // El error aquí casi siempre es por fallos en Redis o la DB, no por el token.
-    return res.status(403).json({ success: false, message: 'Token inválido, expirado o error interno.' });
-  }
+    } catch (err) {
+        console.error('❌ Error crítico en authMiddleware:', err.message);
+        return res.status(500).json({ success: false, message: 'Error interno de autenticación' });
+    }
 }
 
 module.exports = authMiddleware;

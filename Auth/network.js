@@ -10,7 +10,8 @@ const { registerSchema, loginSchema } = require('./validators');
 const sessionService = require('./serviceSession');
 const revocationService = require('./sessionRevocation'); 
 
-// Importamos todas las utilidades de JWT necesarias
+// Importamos la librería para procesar las cookies manualmente
+const cookie = require('cookie'); 
 const { verify, decode } = require('../utils/jwt'); 
 
 // ===================================================
@@ -32,10 +33,7 @@ function validate(schema) {
 // ===================================================
 router.post('/register', validate(registerSchema), async (req, res) => {
   try {
-    // El controller ahora devuelve directamente el objeto { id, friendId, ... }
     const user = await controller.register(req.body);
-    
-    // Devolvemos { user } dentro del body de respuesta
     response.success(req, res, { user }, 201);
   } catch (err) {
     console.error('❌ Error en /auth/register:', err.message);
@@ -44,45 +42,36 @@ router.post('/register', validate(registerSchema), async (req, res) => {
 });
 
 // ===================================================
-// 🟢 Login (Con Detección de Dispositivo)
+// 🟢 Login (Único y unificado)
 // ===================================================
 router.post('/login', validate(loginSchema), async (req, res) => {
   try {
     const { user } = await controller.login(req.body);
-
     const deviceHeader = req.headers['x-client-device']?.toLowerCase();
     const isPWA = deviceHeader === 'mobile-pwa';
     
-    // ✨ CORTE 2: Atrapamos el token que ahora devuelve la función
     const token = sessionService.create(res, user, isPWA); 
 
-    // ✨ Y lo enviamos en la respuesta JSON para que el frontend lo guarde
     response.success(req, res, { user, sessionType: isPWA ? 'PWA' : 'WEB', token }, 200);
   } catch (e) {
     console.error('❌ Error en /auth/login:', e.message);
     response.error(req, res, e.message, 401); 
   }
 });
+
 // ===================================================
 // 🟢 Perfil protegido (profile)
 // ===================================================
 router.get('/profile', auth, async (req, res) => {
   try {
-    // Aquí usamos req.user que viene del middleware 'auth'
-    // Aseguramos de pasar friendId si el middleware lo inyectó (depende de tu JWT payload)
-    // Si no está en el token, podrías necesitar hacer una consulta a BD, pero por eficiencia
-    // asumimos que lo básico está aquí.
     const user = { 
         id: req.user.id, 
-        friendId: req.user.friendId, // Idealmente esto debería estar en el payload del token
+        friendId: req.user.friendId, 
         name: req.user.name, 
         email: req.user.email 
     }; 
     
-    response.success(req, res, { 
-        user, 
-        sessionType: req.sessionType 
-    }, 200);
+    response.success(req, res, { user, sessionType: req.sessionType }, 200);
   } catch (e) {
     console.error('❌ Error en /auth/profile:', e.message);
     response.error(req, res, e.message, 401);
@@ -90,43 +79,47 @@ router.get('/profile', auth, async (req, res) => {
 });
 
 // ===================================================
-// 🟢 Validar Sesión (/me) - Para el frontend initSession
+// 🟢 Validar Sesión (/me) - ¡ULTRARRÁPIDO Y SIN DB!
 // ===================================================
-router.get('/me', async (req, res) => {
+router.get('/me', auth, async (req, res) => {
   try {
-    // ✨ CORTE 3: Buscamos el token en las cookies O en el Header Authorization
-    let token = req.cookies?.at;
-    
-    if (!token && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
-
-    if (!token) return response.error(req, res, 'No session', 401);
-
-    const user = await controller.getUserFromToken(token);
-    response.success(req, res, { user, session: true }, 200);
+      // El guardia (middleware 'auth') ya hizo el trabajo pesado.
+      // Validó la cookie, la desencriptó y nos dejó los datos en req.user
+      // ¡Y gracias a la refactorización anterior, req.user ya tiene el friendId!
+      
+      response.success(req, res, { user: req.user }, 200);
   } catch (e) {
-    response.error(req, res, 'Invalid session', 401);
+      console.error('❌ Error en /auth/me:', e);
+      response.error(req, res, 'Sesión inválida', 401);
   }
 });
 
 // ===================================================
-// 🟢 Refresh Token
+// 🟢 Refresh Token - ¡SIN RIESGO DE CRASH!
 // ===================================================
 router.post('/refresh', async (req, res) => {
   try {
-    const rt = req.cookies?.rt;
-    const decoded = verify(rt);
+    const cookies = cookie.parse(req.headers.cookie || '');
+    const rt = cookies.rt; 
 
-    if (!decoded?.id) return response.error(req, res, 'Refresh token inválido o expirado', 401);
+    if (!rt) return response.error(req, res, 'Refresh token inexistente', 401);
+
+    // Decodificamos el Refresh Token manualmente
+    const decoded = verify(rt);
+    if (!decoded || !decoded.id) throw new Error('Token de refresco inválido o expirado');
+
+    // 🟢 RECONSTRUIMOS EL USUARIO DESDE EL TOKEN (Sin tocar MongoDB)
+    const user = {
+        id: decoded.id,
+        name: decoded.name,
+        email: decoded.email,
+        friendId: decoded.friendId // Mantenemos vivo el ID Verde
+    };
     
     const deviceHeader = req.headers['x-client-device']?.toLowerCase();
     const isPWA = deviceHeader === 'mobile-pwa';
 
-    // Generamos una NUEVA sesión
-    // Nota: Aquí deberías volver a buscar el usuario en BD si quieres actualizar el friendId 
-    // en el nuevo token, pero por ahora mantenemos lo básico del token anterior.
-    const user = { id: decoded.id, name: decoded.name, email: decoded.email }; 
+    // Regeneramos las cookies
     sessionService.create(res, user, isPWA);
 
     response.success(req, res, { refreshed: true, sessionType: isPWA ? 'PWA' : 'WEB' }, 200);
@@ -135,12 +128,12 @@ router.post('/refresh', async (req, res) => {
     response.error(req, res, 'No autorizado', 401);
   }
 });
-
 // ===================================================
 // 🟢 Logout
 // ===================================================
 router.post('/logout', async (req, res) => {
-  const rt = req.cookies?.rt;
+  const cookies = cookie.parse(req.headers.cookie || '');
+  const rt = cookies.rt;
 
   if (rt) {
     const decodedPayload = decode(rt); 

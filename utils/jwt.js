@@ -1,76 +1,64 @@
 'use strict';
 const jwt = require('jsonwebtoken');
 const config = require('../config');
-const crypto = require('crypto'); // Nativo en Node.js recientes
+const crypto = require('crypto');
 
 const SECRET = config.jwtSecret || process.env.JWT_SECRET || 'fallback_secret';
 
-// ===================================================
-// ⏳ Definición de TTLs (Tiempos de vida)
-// ===================================================
+// TTLs (Tiempos de vida)
 const ACCESS_TTL = process.env.JWT_ACCESS_TTL || '15m'; 
 const REFRESH_TTL_WEB = process.env.JWT_REFRESH_TTL_WEB || '30m'; 
 const REFRESH_TTL_PWA = process.env.JWT_REFRESH_TTL_PWA || '7d'; 
 
-// ===================================================
-// 🧮 Utilidad: Convertir TTL (string) a Milisegundos
-// ===================================================
+/**
+ * Convierte TTL a milisegundos para res.cookie(maxAge)
+ */
 function ttlToMs(ttl) {
   if (typeof ttl === 'number') return ttl;
-  if (!ttl) return 0;
-  
-  // Regex para capturar número y unidad (s, m, h, d)
   const match = /^(\d+)([smhd])$/.exec(ttl);
   if (!match) return 0;
   
   const value = parseInt(match[1], 10);
-  const unit = match[2];
-  
-  switch (unit) {
-    case 's': return value * 1000;
-    case 'm': return value * 60 * 1000;
-    case 'h': return value * 60 * 60 * 1000;
-    case 'd': return value * 24 * 60 * 60 * 1000;
-    default: return 0;
-  }
+  const units = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  return value * (units[match[2]] || 0);
 }
 
-// ===================================================
-// ✍️ Firmar Tokens
-// ===================================================
-
 /**
- * Firma un Access Token (vida corta) con JTI para revocación
+ * Firma el Access Token.
+ * @param {Object} payload Debe incluir { id, email, friendId }
  */
-function signAccess(payload, options = {}) {
+function signAccess(payload) {
+  // Verificación preventiva: Si no hay friendId, el sistema fallará después
+  if (!payload.friendId) {
+    console.error('❌ Payload sin friendId detectado en signAccess');
+  }
+
   const jti = crypto.randomUUID(); 
-  const opts = Object.assign({}, options, { 
+  return jwt.sign(payload, SECRET, { 
     expiresIn: ACCESS_TTL,
     jwtid: jti 
   });
-  return jwt.sign(payload, SECRET, opts);
 }
 
-/**
- * Firma un Refresh Token (vida variable) con JTI para revocación
- */
-function signRefresh(payload, customTTL = REFRESH_TTL_PWA, options = {}) {
+function signRefresh(payload, customTTL = REFRESH_TTL_PWA) {
   const jti = crypto.randomUUID(); 
-  const opts = Object.assign({}, options, { 
+  return jwt.sign(payload, SECRET, { 
     expiresIn: customTTL,
     jwtid: jti 
   });
-  return jwt.sign(payload, SECRET, opts);
 }
 
-// ===================================================
-// 🔍 Verificar y Decodificar
-// ===================================================
-
+/**
+ * Verifica el token y maneja errores de forma explícita
+ */
 function verify(token) {
   try {
     return jwt.verify(token, SECRET);
   } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      // Log mínimo, solo para debug interno si es necesario
+      return { expired: true }; 
+    }
     return null;
   }
 }
@@ -88,7 +76,7 @@ module.exports = {
   signRefresh,
   verify,
   decode,
-  ttlToMs, // 🔥 CRÍTICO: Ahora está definida y exportada
+  ttlToMs,
   ACCESS_TTL,
   REFRESH_TTL_WEB,
   REFRESH_TTL_PWA,
